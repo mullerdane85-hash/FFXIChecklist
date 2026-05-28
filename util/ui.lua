@@ -813,9 +813,8 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
 
     -- Left-button DOWN: hit-test against subtab rects so a click
     -- anywhere on a subtab's row (not just on the text) fires its
-    -- on_click. If the click lands on a subtab row we consume it
-    -- (return true). Otherwise fall through so the main tab buttons'
-    -- and close X's own register_event('left_click') handlers fire.
+    -- on_click. We always return true at the end of the handler so
+    -- the click doesn't fall through to the game world.
     if type == 1 then
         if tabs[active_tab] and tabs[active_tab].subtabs then
             for i, s in pairs(tabs[active_tab].subtabs) do
@@ -824,31 +823,22 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
                    and x >= r.x and x <= r.x + r.w
                    and y >= r.y and y <= r.y + r.h then
                     if s.on_click then s.on_click() end
-                    return true
+                    break
                 end
             end
         end
-        -- Not a subtab click — let texts.new handlers (main tabs,
-        -- close X, scroll arrows) take their turn.
-        return false
     end
 
-    -- Right-click events: block so FFXI doesn't grab the camera while
-    -- the cursor is over the panel. This is the main camera-go-crazy
-    -- fix — without it, every right-click on the window starts a
-    -- camera-drag in the world behind it.
-    if type == 3 or type == 4 then
-        return true
-    end
-
-    -- Middle-click: block too (FFXI uses middle-click for some default
-    -- camera behaviors and we don't want stray panel clicks to trigger).
-    if type == 5 or type == 6 then
-        return true
-    end
-
-    -- Left-clicks and moves pass through so the texts.new buttons
-    -- (which have their own register_event('left_click') handlers)
-    -- can detect their clicks normally.
-    return false
+    -- Consume EVERY mouse event the cursor is over the panel for.
+    -- Returning true here only controls game-engine propagation, not
+    -- the texts.new register_event('left_click') / drag handlers,
+    -- which fire from their own internal mouse listener — so main
+    -- tab buttons, close X, scroll arrows, and title-bar drag all
+    -- still work correctly while:
+    --   - right-clicks no longer grab the FFXI camera
+    --   - left-clicks on dead space don't trigger the "invalid
+    --     action" beep
+    --   - middle-clicks don't trigger camera-recenter
+    --   - wheel events (handled above) don't scroll the game world
+    return true
 end)

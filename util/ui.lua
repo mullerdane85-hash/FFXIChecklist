@@ -226,15 +226,19 @@ ui_show_all = function()
     for _, tab in ipairs(tabs) do
         if tab.button and tab.button.show then tab.button:show() end
     end
-    -- Subtabs of the active main tab — only those, hide the rest
+    -- Subtabs: the prerender draw_subtabs() will (re)show only the
+    -- visible ones for the active tab. Make sure inactive tabs'
+    -- subtabs stay hidden.
     for i, tab in ipairs(tabs) do
         if tab.subtabs then
             for _, s in pairs(tab.subtabs) do
-                if i == active_tab then s.button:show() else s.button:hide() end
+                if i ~= active_tab then
+                    if s.bg then s.bg:hide() end
+                    if s.label then s.label:hide() end
+                end
             end
         end
     end
-    -- Scroll arrows: only when needed (handled per-frame in draw_sidebar)
 end
 
 ui_hide_all = function()
@@ -246,12 +250,14 @@ ui_hide_all = function()
     ui.title_text:hide(); ui.close_text:hide()
     ui.menu:hide()
     ui.sidebar_up:hide(); ui.sidebar_dn:hide()
-    -- EVERY tab button and EVERY subtab button — no leaks
+    -- EVERY main tab + EVERY subtab (bg + label) -- no floating leftovers
     for _, tab in ipairs(tabs) do
         if tab.button and tab.button.hide then tab.button:hide() end
         if tab.subtabs then
             for _, s in pairs(tab.subtabs) do
-                if s.button then s.button:hide() end
+                if s.bg then s.bg:hide() end
+                if s.label then s.label:hide() end
+                s.rect = {x = 0, y = 0, w = 0, h = 0}
             end
         end
     end
@@ -304,27 +310,54 @@ end
 initiate_subtabs = function(activetab, subtabslist)
     tabs[activetab].subtabs = {}
     for i, tab in ipairs(subtabslist) do
+        -- Each subtab is now a fixed-width images.new background + a
+        -- transparent texts.new label on top + a click handler closure.
+        -- Clicks are hit-tested against `rect` in the global mouse
+        -- handler, so the whole bg rectangle is clickable (not just
+        -- the text). This gives a uniform-column-width sidebar without
+        -- relying on monospaced-style space padding.
+        local bg = images.new({
+            color = { alpha = UI_SUBTABBG.alpha, red = UI_SUBTABBG.red,
+                      green = UI_SUBTABBG.green, blue = UI_SUBTABBG.blue },
+            pos   = { x = 0, y = 0 },
+            size  = { width = 1, height = 1 },
+            draggable = false,
+            visible = false,
+        })
+        local label = texts.new('', {
+            pos = {x = 0, y = 0},
+            text = { font = 'Arial', size = SUBTAB_FONT_SIZE(),
+                     red = 255, green = 255, blue = 255,
+                     stroke = {width = 1, alpha = 180, red = 0, green = 0, blue = 0} },
+            bg = { alpha = 0 },
+            padding = 0,
+            flags = { draggable = false },
+        })
+        label:text(defaulttab_logs[tab].name)
         tabs[activetab].subtabs[i] = {
             active_tab = activetab,
             tab        = tab,
-            button     = make_button(SUBTAB_FONT_SIZE()),
-        }
-        tabs[activetab].subtabs[i].button:text(defaulttab_logs[tab].name)
-        tabs[activetab].subtabs[i].button:register_event('left_click', function()
-            tabs[activetab].items = L{}
-            append_header(activetab, tab_logs[tab].name..' (%d/%d)', tab_logs[tab].completed, tab_logs[tab].total)
-            if addonhelptext[tab] then
-                for j, _ in pairs(addonhelptext[tab]) do
-                    append_addonhelp(activetab, addonhelptext[tab][j][1], playertracker.talk_to_npc[addonhelptext[tab][j][2]])
+            bg         = bg,
+            label      = label,
+            rect       = {x = 0, y = 0, w = 0, h = 0},
+            on_click   = function()
+                tabs[activetab].items = L{}
+                append_header(activetab, tab_logs[tab].name..' (%d/%d)',
+                              tab_logs[tab].completed, tab_logs[tab].total)
+                if addonhelptext[tab] then
+                    for j, _ in pairs(addonhelptext[tab]) do
+                        append_addonhelp(activetab, addonhelptext[tab][j][1],
+                                         playertracker.talk_to_npc[addonhelptext[tab][j][2]])
+                    end
                 end
-            end
-            append_items(tabs[activetab].items, tab_logs[tab].items)
-            active_subtab = i
-            selected      = 1
-            scroll        = 0
-            subtabs_drawn = false
-            draw()
-        end)
+                append_items(tabs[activetab].items, tab_logs[tab].items)
+                active_subtab = i
+                selected      = 1
+                scroll        = 0
+                subtabs_drawn = false
+                draw()
+            end,
+        }
     end
 end
 
@@ -412,10 +445,21 @@ draw_subtabs = function()
         sidebar_scroll = math.max(0, total - SIDEBAR_VISIBLE_ROWS)
     end
 
-    -- Hide every subtab first (only the visible window gets shown)
+    -- Hide every subtab first; only the visible window gets shown.
+    -- Also zero each rect so the mouse handler doesn't match against
+    -- stale geometry for hidden subtabs.
     for _, s in pairs(tabs[active_tab].subtabs) do
-        if s.button then s.button:hide() end
+        if s.bg then s.bg:hide() end
+        if s.label then s.label:hide() end
+        s.rect = {x = 0, y = 0, w = 0, h = 0}
     end
+
+    -- Fixed dimensions for each row. Every subtab gets the SAME width
+    -- (computed from SIDEBAR_W minus margins) so the column reads as
+    -- evenly stacked rectangles regardless of label length.
+    local row_w = SIDEBAR_W - PADDING()
+    local row_h = SUBTAB_HEIGHT() + (SUBTAB_PADDING() * 2)
+    local row_gap = 2
 
     local need_scroll = total > SIDEBAR_VISIBLE_ROWS
     local cur_y = sy
@@ -425,7 +469,7 @@ draw_subtabs = function()
         ui.sidebar_up:size(SUBTAB_FONT_SIZE())
         ui.sidebar_up:pad(SUBTAB_PADDING())
         local _, h = ui.sidebar_up:extents()
-        cur_y = cur_y + (h or SCROLL_BTN_H) + 1
+        cur_y = cur_y + (h or SCROLL_BTN_H) + row_gap
     else
         ui.sidebar_up:hide()
     end
@@ -436,31 +480,38 @@ draw_subtabs = function()
         if not i then break end
         local sub = tabs[active_tab].subtabs[i]
         local tabname = sub.tab
-        sub.button:pos(sx, cur_y)
-        sub.button:visible(true)
-        sub.button:size(SUBTAB_FONT_SIZE())
-        sub.button:pad(SUBTAB_PADDING())
+
+        -- Pick bg color by state
+        local c
+        if active_subtab == i then
+            c = UI_SUBTABBG_SELECTED
+        elseif (tab_logs[tabname].completed >= tab_logs[tabname].total) and (tab_logs[tabname].total > 0) then
+            c = UI_SUBTABBG_COMPLETED
+        else
+            c = UI_SUBTABBG
+        end
+
+        -- Position + size the fixed-width background rectangle
+        sub.bg:pos(sx, cur_y)
+        sub.bg:size(row_w, row_h)
+        sub.bg:color(c.red, c.green, c.blue)
+        sub.bg:alpha(c.alpha)
+        sub.bg:show()
+
+        -- Label sits on top of the bg, left-padded inside it
         local display = defaulttab_logs[tabname].name
                      .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total)
-        -- Pad to the uniform width computed above. Trailing spaces in
-        -- Arial aren't perfectly monospaced but they make the buttons
-        -- consistent enough that the sidebar reads as a clean column.
-        if #display < max_len then
-            display = display .. (' '):rep(max_len - #display)
-        end
-        sub.button:text(display)
-        if active_subtab == i then
-            sub.button:bg_color(UI_SUBTABBG_SELECTED.red, UI_SUBTABBG_SELECTED.green, UI_SUBTABBG_SELECTED.blue)
-            sub.button:bg_alpha(UI_SUBTABBG_SELECTED.alpha)
-        elseif (tab_logs[tabname].completed >= tab_logs[tabname].total) and (tab_logs[tabname].total > 0) then
-            sub.button:bg_color(UI_SUBTABBG_COMPLETED.red, UI_SUBTABBG_COMPLETED.green, UI_SUBTABBG_COMPLETED.blue)
-            sub.button:bg_alpha(UI_SUBTABBG_COMPLETED.alpha)
-        else
-            sub.button:bg_color(UI_SUBTABBG.red, UI_SUBTABBG.green, UI_SUBTABBG.blue)
-            sub.button:bg_alpha(UI_SUBTABBG.alpha)
-        end
-        local _, h = sub.button:extents()
-        cur_y = cur_y + (h or SUBTAB_HEIGHT()) + 1
+        sub.label:text(display)
+        sub.label:size(SUBTAB_FONT_SIZE())
+        sub.label:pos(sx + SUBTAB_PADDING(),
+                      cur_y + math.floor((row_h - SUBTAB_FONT_SIZE()) / 2))
+        sub.label:show()
+
+        -- Hit-test rect for the global mouse handler. Click anywhere
+        -- on the row (not just on the text) fires the on_click handler.
+        sub.rect = {x = sx, y = cur_y, w = row_w, h = row_h}
+
+        cur_y = cur_y + row_h + row_gap
     end
 
     if need_scroll and sidebar_scroll + SIDEBAR_VISIBLE_ROWS < total then
@@ -484,7 +535,9 @@ hide_subtabs = function()
     for _, tab in ipairs(tabs) do
         if tab.subtabs then
             for _, s in pairs(tab.subtabs) do
-                if s.button then s.button:hide() end
+                if s.bg then s.bg:hide() end
+                if s.label then s.label:hide() end
+                s.rect = {x = 0, y = 0, w = 0, h = 0}
             end
         end
     end
@@ -733,6 +786,28 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
             draw()
             return true
         end
+    end
+
+    -- Left-button DOWN: hit-test against subtab rects so a click
+    -- anywhere on a subtab's row (not just on the text) fires its
+    -- on_click. If the click lands on a subtab row we consume it
+    -- (return true). Otherwise fall through so the main tab buttons'
+    -- and close X's own register_event('left_click') handlers fire.
+    if type == 1 then
+        if tabs[active_tab] and tabs[active_tab].subtabs then
+            for i, s in pairs(tabs[active_tab].subtabs) do
+                local r = s.rect
+                if r and r.w > 0 and r.h > 0
+                   and x >= r.x and x <= r.x + r.w
+                   and y >= r.y and y <= r.y + r.h then
+                    if s.on_click then s.on_click() end
+                    return true
+                end
+            end
+        end
+        -- Not a subtab click — let texts.new handlers (main tabs,
+        -- close X, scroll arrows) take their turn.
+        return false
     end
 
     -- Right-click events: block so FFXI doesn't grab the camera while

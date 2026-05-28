@@ -395,6 +395,18 @@ draw_subtabs = function()
     table.sort(sub_list)
 
     local total = #sub_list
+
+    -- Pre-pass: find the longest subtab display string across the WHOLE
+    -- active-tab subtab list (not just the visible window). Padding all
+    -- buttons to that length keeps the sidebar a uniform width even as
+    -- we scroll through entries with varying name lengths.
+    local max_len = 0
+    for _, i in ipairs(sub_list) do
+        local tabname = tabs[active_tab].subtabs[i].tab
+        local display = defaulttab_logs[tabname].name
+                     .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total)
+        if #display > max_len then max_len = #display end
+    end
     if sidebar_scroll < 0 then sidebar_scroll = 0 end
     if sidebar_scroll > math.max(0, total - SIDEBAR_VISIBLE_ROWS) then
         sidebar_scroll = math.max(0, total - SIDEBAR_VISIBLE_ROWS)
@@ -428,7 +440,15 @@ draw_subtabs = function()
         sub.button:visible(true)
         sub.button:size(SUBTAB_FONT_SIZE())
         sub.button:pad(SUBTAB_PADDING())
-        sub.button:text(defaulttab_logs[tabname].name .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total))
+        local display = defaulttab_logs[tabname].name
+                     .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total)
+        -- Pad to the uniform width computed above. Trailing spaces in
+        -- Arial aren't perfectly monospaced but they make the buttons
+        -- consistent enough that the sidebar reads as a clean column.
+        if #display < max_len then
+            display = display .. (' '):rep(max_len - #display)
+        end
+        sub.button:text(display)
         if active_subtab == i then
             sub.button:bg_color(UI_SUBTABBG_SELECTED.red, UI_SUBTABBG_SELECTED.green, UI_SUBTABBG_SELECTED.blue)
             sub.button:bg_alpha(UI_SUBTABBG_SELECTED.alpha)

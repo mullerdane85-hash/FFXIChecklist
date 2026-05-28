@@ -208,20 +208,12 @@ ui_hide_all = function()
     end
 end
 
--- Compatibility: existing code calls ui.menu:show()/hide() directly.
--- Wrap those into show/hide-all so the whole panel toggles together.
-do
-    local _orig_show = ui.menu.show
-    local _orig_hide = ui.menu.hide
-    function ui.menu:show()
-        _orig_show(self)
-        ui_show_all()
-    end
-    function ui.menu:hide()
-        _orig_hide(self)
-        ui_hide_all()
-    end
-end
+-- Note: ui.menu:show() / ui.menu:hide() calls from ffxichecklist.lua flip
+-- trackermenusettings.visibility before/after this point. The prerender
+-- handler at the bottom of this file watches that flag and calls
+-- ui_show_all() / ui_hide_all() on transition — no method-wrapping
+-- needed (the wrapper-based approach was unreliable on the texts
+-- metatable, leaving the background images permanently hidden).
 
 -- =============================================================================
 -- Tab + subtab button creation (click handlers preserved from the original).
@@ -524,8 +516,21 @@ end
 -- =============================================================================
 initiate_tabs()
 
+-- Visibility state machine: ui_show_all / ui_hide_all only fire on the
+-- transition edges. Initial state is hidden until trackermenusettings
+-- flips to visible (either from saved settings, or from a show command).
+local _was_visible = false
+
 windower.register_event('prerender', function()
-    if not trackermenusettings.visibility then return end
+    local is_visible = trackermenusettings.visibility == true
+    if is_visible and not _was_visible then
+        ui_show_all()
+        _was_visible = true
+    elseif (not is_visible) and _was_visible then
+        ui_hide_all()
+        _was_visible = false
+    end
+    if not is_visible then return end
     draw_tabs()
     draw_subtabs()
     draw()

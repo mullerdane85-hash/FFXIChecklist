@@ -40,8 +40,10 @@ CHAR_WIDTH       = function() return 6 * UI_SCALE end
 VISIBLE_ROWS          = 16        -- items pane: rows shown at once
 SIDEBAR_VISIBLE_ROWS  = 14        -- left sidebar: subtab rows shown at once
 
-PANEL_W       = 880 * UI_SCALE
-SIDEBAR_W     = 200 * UI_SCALE
+PANEL_W       = 900 * UI_SCALE
+SIDEBAR_W     = 240 * UI_SCALE       -- bumped from 200 -- the longest subtab labels
+                                     -- ("San d'Oria Missions (0/0)" etc.) were spilling
+                                     -- past the column's right edge into the divider line.
 HEADER_H      = 30 * UI_SCALE
 BORDER        = 3 * UI_SCALE
 MAINTAB_GAP   = 4 * UI_SCALE

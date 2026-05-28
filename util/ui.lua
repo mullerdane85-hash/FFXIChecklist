@@ -197,11 +197,35 @@ initiate_subtabs = function(activetab, subtabslist)
 	end
 end
 
+-- =============================================================================
+-- FFXIChecklist v1.1 layout: VERTICAL SIDEBAR on the left, items on the right
+-- (FFXITrusts-style). The original XIchecklist used a horizontal tab strip
+-- across the top with subtabs wrapping below; this stacks them vertically so
+-- the right pane gets the full width for item text.
+--
+-- Per-tab vertical position:
+--   main tab i lands at  base_y + maintabs_y_offset[i]
+-- where maintabs_y_offset is recomputed each frame, allowing the active
+-- tab's subtabs to push subsequent main tabs further down.
+-- =============================================================================
+maintabs_y_offset = {}    -- [i] = pixel y-offset of tab i from base_y
+sidebar_width     = 0     -- widest main / subtab button this frame
+
 draw_tabs = function()
-	local total_xextent, total_yextent = 0, 0
-	local xextent, yextent = 0, 0
+	-- Anchor: trackermenusettings.pos is the SIDEBAR's top-left (the
+	-- whole UI's anchor). ui.menu (the items pane) is positioned by
+	-- draw() to sit just to the right of the sidebar. Both panes share
+	-- the same anchor so dragging the items pane moves everything.
+	local base_x = trackermenusettings.pos.x
+	local base_y = trackermenusettings.pos.y
+	local row_h  = LINE_HEIGHT()
+	local sub_h  = math.floor(LINE_HEIGHT() * 0.9)
+	local total_yextent = 0
+	local widest = 0
+
 	for i, tab in ipairs(tabs) do
-		tabs[i].button:pos(ui.menu:pos_x()+total_xextent, ui.menu:pos_y())
+		maintabs_y_offset[i] = total_yextent
+		tabs[i].button:pos(base_x, base_y + total_yextent)
 		tabs[i].button:visible(ui.menu:visible())
 		tabs[i].button:size(FONT_SIZE())
 		tabs[i].button:pad(PADDING())
@@ -212,51 +236,75 @@ draw_tabs = function()
 			tabs[i].button:bg_color(UI_TABBG.red, UI_TABBG.green, UI_TABBG.blue)
 			tabs[i].button:bg_alpha(UI_TABBG.alpha)
 		end
-		xextent, yextent = tabs[i].button:extents()
-		total_xextent = total_xextent + xextent
-	end
-	ui.width = total_xextent
-	maintabs_height = yextent
-end
+		local xextent, yextent = tabs[i].button:extents()
+		if xextent > widest then widest = xextent end
+		total_yextent = total_yextent + yextent + 2
 
-draw_subtabs = function()
-	if subtabs_initiated and subtabs_drawn then return end
-	local total_xextent, total_yextent = 0, maintabs_height+PADDING()
-	local xextent, yextent = 0, 0
-	local lines = 0
-	hide_subtabs()
-	if tabs[active_tab].subtabs then
-		lines = 1
-		for i, tab in pairs(tabs[active_tab].subtabs) do
-			tabs[active_tab].subtabs[i].button:pos(ui.menu:pos_x()+total_xextent, ui.menu:pos_y()+total_yextent)
-			local tabname = tabs[active_tab].subtabs[i].tab
-			tabs[active_tab].subtabs[i].button:text(defaulttab_logs[tabname].name .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total))
-			tabs[active_tab].subtabs[i].button:visible(ui.menu:visible())
-			tabs[active_tab].subtabs[i].button:size(SUBTAB_FONT_SIZE())
-			tabs[active_tab].subtabs[i].button:pad(SUBTAB_PADDING())
-			xextent, yextent = tabs[active_tab].subtabs[i].button:extents()
-			total_xextent = total_xextent + xextent + 7
-			if active_subtab == i then
-				tabs[active_tab].subtabs[i].button:bg_color(UI_SUBTABBG_SELECTED.red, UI_SUBTABBG_SELECTED.green, UI_SUBTABBG_SELECTED.blue)
-				tabs[active_tab].subtabs[i].button:bg_alpha(UI_SUBTABBG_SELECTED.alpha)
-			else
-				if (tab_logs[tabname].completed >= tab_logs[tabname].total) and (tab_logs[tabname].total > 0) then
-					tabs[active_tab].subtabs[i].button:bg_color(UI_SUBTABBG_COMPLETED.red, UI_SUBTABBG_COMPLETED.green, UI_SUBTABBG_COMPLETED.blue)
-					tabs[active_tab].subtabs[i].button:bg_alpha(UI_SUBTABBG_COMPLETED.alpha)
-				else
-					tabs[active_tab].subtabs[i].button:bg_color(UI_SUBTABBG.red, UI_SUBTABBG.green, UI_SUBTABBG.blue)
-					tabs[active_tab].subtabs[i].button:bg_alpha(UI_SUBTABBG.alpha)
-				end
-			end
-			if total_xextent > ui.width then
-				total_xextent = xextent + 7
-				lines = lines + 1
-				total_yextent = total_yextent + yextent + 3
-				tabs[active_tab].subtabs[i].button:pos(ui.menu:pos_x(), ui.menu:pos_y()+total_yextent)
+		-- If this is the active tab AND it has subtabs, reserve vertical
+		-- space for them so the NEXT main tab gets pushed down. The actual
+		-- subtab positioning happens in draw_subtabs() — we just account
+		-- for the room they'll take.
+		if active_tab == i and tabs[i].subtabs then
+			for _ in pairs(tabs[i].subtabs) do
+				total_yextent = total_yextent + sub_h + 1
 			end
 		end
 	end
-	subtabs_height = (lines > 0 ) and total_yextent or 0
+
+	sidebar_width  = widest
+	maintabs_height = total_yextent
+	ui.width        = widest
+end
+
+draw_subtabs = function()
+	-- New layout: subtabs of the active main tab stack VERTICALLY directly
+	-- below their parent in the sidebar (indented). Subtabs of non-active
+	-- main tabs are hidden.
+	if not subtabs_initiated then return end
+	hide_subtabs()
+	if not tabs[active_tab] or not tabs[active_tab].subtabs then
+		subtabs_height = 0
+		return
+	end
+
+	-- Sidebar anchor — match draw_tabs (relative to trackermenusettings.pos).
+	local base_x = trackermenusettings.pos.x
+	local base_y = trackermenusettings.pos.y
+	-- Find the y position just below the active main tab button
+	local parent_y = maintabs_y_offset[active_tab] or 0
+	local main_xextent, main_yextent = tabs[active_tab].button:extents()
+	local cursor_y = parent_y + main_yextent + 1
+	local indent_x = math.floor(PADDING() * 0.6)
+
+	for i, _ in pairs(tabs[active_tab].subtabs) do
+		local sub = tabs[active_tab].subtabs[i]
+		local tabname = sub.tab
+		sub.button:pos(base_x + indent_x, base_y + cursor_y)
+		sub.button:text(defaulttab_logs[tabname].name .. ' (%d/%d)':format(tab_logs[tabname].completed, tab_logs[tabname].total))
+		sub.button:visible(ui.menu:visible())
+		sub.button:size(SUBTAB_FONT_SIZE())
+		sub.button:pad(SUBTAB_PADDING())
+		if active_subtab == i then
+			sub.button:bg_color(UI_SUBTABBG_SELECTED.red, UI_SUBTABBG_SELECTED.green, UI_SUBTABBG_SELECTED.blue)
+			sub.button:bg_alpha(UI_SUBTABBG_SELECTED.alpha)
+		else
+			if (tab_logs[tabname].completed >= tab_logs[tabname].total) and (tab_logs[tabname].total > 0) then
+				sub.button:bg_color(UI_SUBTABBG_COMPLETED.red, UI_SUBTABBG_COMPLETED.green, UI_SUBTABBG_COMPLETED.blue)
+				sub.button:bg_alpha(UI_SUBTABBG_COMPLETED.alpha)
+			else
+				sub.button:bg_color(UI_SUBTABBG.red, UI_SUBTABBG.green, UI_SUBTABBG.blue)
+				sub.button:bg_alpha(UI_SUBTABBG.alpha)
+			end
+		end
+		local sub_xextent, sub_yextent = sub.button:extents()
+		-- Track widest subtab against the sidebar width
+		if (sub_xextent + indent_x) > sidebar_width then
+			sidebar_width = sub_xextent + indent_x
+			ui.width = sidebar_width
+		end
+		cursor_y = cursor_y + sub_yextent + 1
+	end
+	subtabs_height = cursor_y - (parent_y + main_yextent + 1)
 end
 
 hide_subtabs = function()
@@ -333,15 +381,30 @@ clamp_scroll = function(count)
 end
 
 draw = function()
+	-- In the new vertical-sidebar layout, ui.menu is the RIGHT pane (the
+	-- items list). It sits next to the sidebar buttons rather than below
+	-- them. The sidebar buttons are positioned by draw_tabs / draw_subtabs
+	-- using their own coordinates; ui.menu just needs to shift right by
+	-- the sidebar width so the two don't overlap.
+	local saved_x = trackermenusettings.pos.x
+	local saved_y = trackermenusettings.pos.y
+	local gap = math.floor(PADDING() * 0.8)
+	local items_x = saved_x + (sidebar_width or 0) + gap
+	ui.menu:pos(items_x, saved_y)
+
 	local text = ''
-	if ui.width then
-		text = text .. '\n'.. '─':rep((PADDING()/CHAR_WIDTH())+(ui.width/(2*CHAR_WIDTH()))) .. '\n'
-	else
-		text = text .. '\n────────────────────────────────────────────────────────────────\n'
+	-- Right-pane header: which category/subcategory is being shown
+	local heading = (tabs[active_tab] and tabs[active_tab].name) or ''
+	if tabs[active_tab] and tabs[active_tab].subtabs
+	   and active_subtab and active_subtab > 0
+	   and tabs[active_tab].subtabs[active_subtab] then
+		local sn = tabs[active_tab].subtabs[active_subtab].tab
+		if defaulttab_logs[sn] then
+			heading = heading .. ' / ' .. defaulttab_logs[sn].name
+		end
 	end
-	if subtabs_height > 0 then
-		text = text .. ('\n'):rep(subtabs_height/LINE_HEIGHT()-1)
-	end
+	text = text .. '\\cs(150,210,255)── '..heading..' ──\\cr\n'
+
 	-- List
 	local items = tabs[active_tab].items
 	if (trackermenusettings.showcompleted == false) then
@@ -351,9 +414,7 @@ draw = function()
 	end
 	local count = items:length()
 	if count == 0 then
-		-- add active_tab helper text here
-		--items = {'\\cs(128,128,128)Change zones to update Quests / Campaigns / Warps / Monstrosity \\cr', '\\cs(128,128,128)Check the README or "//xic help" to register NPC-related data \\cr'}
-		items = {util.list_item(nil, '\\cs(128,128,128)Change zones to update Quests / Campaigns / Warps / Monstrosity \\cr \n \\cs(128,128,128)Check the README or "//xic help" to register NPC-related data \\cr')}
+		items = {util.list_item(nil, '\\cs(128,128,128)Change zones to update Quests / Campaigns / Warps / Monstrosity \\cr \n \\cs(128,128,128)Check the README or "//ffxic help" to register NPC-related data \\cr')}
 		count = 1
 	end
 	clamp_scroll(count)
@@ -364,7 +425,6 @@ draw = function()
 		end
 	end
 	ui.menu:text(text)
-	ui.menu:pos(trackermenusettings.pos.x, trackermenusettings.pos.y)
 end
 
 initiate_tabs()
@@ -391,10 +451,17 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
     local px, py = ui.menu:pos()
     local items = tabs[active_tab].items
     local count = #items
-	-- save new UI pos if changed
-	if (px ~= trackermenusettings.pos.x) and (py ~= trackermenusettings.pos.y) then
-		trackermenusettings.pos.x = px
-		trackermenusettings.pos.y = py
+	-- Translate items-pane position back to sidebar anchor before saving:
+	-- ui.menu sits at (anchor.x + sidebar_width + gap, anchor.y). When the
+	-- user drags ui.menu we need to recover anchor.x by subtracting the
+	-- sidebar offset, otherwise the sidebar buttons drift further right
+	-- every drag.
+	local gap = math.floor(PADDING() * 0.8)
+	local anchor_x = px - ((sidebar_width or 0) + gap)
+	local anchor_y = py
+	if (anchor_x ~= trackermenusettings.pos.x) or (anchor_y ~= trackermenusettings.pos.y) then
+		trackermenusettings.pos.x = anchor_x
+		trackermenusettings.pos.y = anchor_y
 		trackermenusettings:save()
 	end
 	-- mouse scroll up down

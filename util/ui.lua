@@ -81,6 +81,13 @@ maintab_strip_h   = 0     -- pixel height occupied by the wrapped main tab strip
 panel_h           = 0     -- total panel height (border to border)
 sidebar_end_y     = 0     -- absolute y of the last sidebar element this frame
 
+-- Drag state — owned by the global mouse handler (not the texts library)
+-- so it works reliably even when we consume all mouse events over the
+-- panel. drag.off_x/off_y is the cursor's offset from the panel anchor
+-- at drag-start; updating the anchor by (cursor - offset) on every move
+-- keeps the panel attached to the cursor.
+local drag = { active = false, off_x = 0, off_y = 0 }
+
 -- =============================================================================
 -- Tab data — categories in the horizontal main-tab strip
 -- =============================================================================
@@ -143,14 +150,17 @@ ui.header_line = make_bg(UI_HEADER_LINE)
 ui.divider     = make_bg(UI_DIVIDER)         -- vertical line between sidebar + items
 ui.tabstrip_line = make_bg(UI_HEADER_LINE)   -- horizontal line below main tab strip
 
--- Title + close X
+-- Title + close X. draggable=false: drag is handled by the global mouse
+-- handler so it works reliably when we consume mouse events over the
+-- panel (the texts library's own drag mechanism couldn't fire reliably
+-- in that case).
 ui.title_text = texts.new('', {
     pos = {x = 0, y = 0},
     text = { font = 'Arial', size = TITLE_FONT_SIZE(), red = 130, green = 210, blue = 240,
              stroke = {width = 1, alpha = 200, red = 0, green = 0, blue = 0} },
     bg = { alpha = 0 },
     padding = 0,
-    flags = { draggable = true, bold = true },
+    flags = { draggable = false, bold = true },
 })
 ui.title_text:text('FFXIChecklist')
 
@@ -729,16 +739,10 @@ windower.register_event('prerender', function()
     draw()
 end)
 
--- Drag the title text to move the whole window.
-ui.title_text:register_event('drag', function()
-    local tx, ty = ui.title_text:pos()
-    local anchor_x = tx - BORDER - PADDING()
-    local anchor_y = ty - BORDER - math.floor((HEADER_H - TITLE_FONT_SIZE()) / 2)
-    trackermenusettings.pos.x = anchor_x
-    trackermenusettings.pos.y = anchor_y
-    trackermenusettings:save()
-    subtabs_drawn = false
-end)
+-- (Drag is handled inside the global mouse handler below — it picks up
+-- LMB-down on the title bar, tracks moves, and ends on LMB-up. The
+-- texts-library drag event isn't used here because consuming mouse
+-- events globally blocks the library's internal drag dispatch.)
 
 -- Mouse handler — handles wheel scroll + blocks right-click camera grab
 -- when the cursor is over the panel. Left-click events pass through
@@ -753,8 +757,37 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
     if blocked then return false end
     local px = trackermenusettings.pos.x
     local py = trackermenusettings.pos.y
+
+    -- Active-drag updates run BEFORE the over-panel check because a
+    -- fast drag can put the cursor outside the panel for a frame and
+    -- we still want to follow it.
+    if drag.active then
+        if type == 0 then          -- mouse move
+            trackermenusettings.pos.x = x - drag.off_x
+            trackermenusettings.pos.y = y - drag.off_y
+            trackermenusettings:save()
+            return true
+        elseif type == 2 then      -- LMB up — end drag
+            drag.active = false
+            return true
+        end
+    end
+
     local over = inside(x, y, px, py, PANEL_W, panel_h)
     if not over then return false end
+
+    -- Title-bar hit area = full header strip minus the close-X right edge
+    local title_y_top = py + BORDER
+    local title_y_bot = py + BORDER + HEADER_H
+    local close_x_left = px + PANEL_W - BORDER - PADDING() - 18
+    if type == 1
+       and y >= title_y_top and y <= title_y_bot
+       and x < close_x_left then
+        drag.active = true
+        drag.off_x  = x - px
+        drag.off_y  = y - py
+        return true
+    end
 
     -- Mouse wheel: scroll the pane the cursor is over.
     --   Sidebar zone   → moves sidebar_scroll (the subtab list)

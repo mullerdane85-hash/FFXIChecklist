@@ -680,18 +680,59 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
     local over = inside(x, y, px, py, PANEL_W, panel_h)
     if not over then return false end
 
-    -- Mouse wheel: scroll the items pane
+    -- Mouse wheel: scroll the pane the cursor is over.
+    --   Sidebar zone   → moves sidebar_scroll (the subtab list)
+    --   Items zone     → moves selected/scroll (the items list)
     if type == 10 and delta and delta ~= 0 then
-        local items = tabs[active_tab].items
-        local count = #items
-        if delta > 0 then
-            selected = math.max(1, selected - 1)
+        local body_top = py + BORDER + HEADER_H + maintab_strip_h
+        local body_bot = py + panel_h - BORDER
+        local sidebar_left = px + BORDER
+        local sidebar_right = px + BORDER + SIDEBAR_W
+        local items_left = sidebar_right + 1
+        local items_right = px + PANEL_W - BORDER
+
+        local in_sidebar = (x >= sidebar_left and x <= sidebar_right
+                            and y >= body_top and y <= body_bot)
+        local in_items   = (x >= items_left and x <= items_right
+                            and y >= body_top and y <= body_bot)
+
+        if in_sidebar and tabs[active_tab] and tabs[active_tab].subtabs then
+            -- Scroll the subtab list. Count the entries first so we
+            -- don't scroll past the end.
+            local total = 0
+            for _ in pairs(tabs[active_tab].subtabs) do total = total + 1 end
+            local max_scroll = math.max(0, total - SIDEBAR_VISIBLE_ROWS)
+            if delta > 0 then
+                sidebar_scroll = math.max(0, sidebar_scroll - 1)
+            else
+                sidebar_scroll = math.min(max_scroll, sidebar_scroll + 1)
+            end
+            return true
+        elseif in_items then
+            local items = tabs[active_tab].items
+            local count = #items
+            if delta > 0 then
+                selected = math.max(1, selected - 1)
+            else
+                selected = math.min(count, selected - delta)
+            end
+            clamp_scroll(count)
+            draw()
+            return true
         else
-            selected = math.min(count, selected - delta)
+            -- Hover is over the header / main tab strip — fall back to
+            -- items scroll so the wheel still does something useful.
+            local items = tabs[active_tab].items
+            local count = #items
+            if delta > 0 then
+                selected = math.max(1, selected - 1)
+            else
+                selected = math.min(count, selected - delta)
+            end
+            clamp_scroll(count)
+            draw()
+            return true
         end
-        clamp_scroll(count)
-        draw()
-        return true
     end
 
     -- Right-click events: block so FFXI doesn't grab the camera while

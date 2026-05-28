@@ -77,6 +77,7 @@ subtabs_drawn     = false
 -- Layout-computed each frame
 maintab_strip_h   = 0     -- pixel height occupied by the wrapped main tab strip
 panel_h           = 0     -- total panel height (border to border)
+sidebar_end_y     = 0     -- absolute y of the last sidebar element this frame
 
 -- =============================================================================
 -- Tab data — categories in the horizontal main-tab strip
@@ -447,9 +448,16 @@ draw_subtabs = function()
         ui.sidebar_dn:visible(true)
         ui.sidebar_dn:size(SUBTAB_FONT_SIZE())
         ui.sidebar_dn:pad(SUBTAB_PADDING())
+        local _, h = ui.sidebar_dn:extents()
+        cur_y = cur_y + (h or SCROLL_BTN_H)
     else
         ui.sidebar_dn:hide()
     end
+
+    -- Record where the sidebar actually ended so draw() can grow the
+    -- panel to enclose it. Without this the body_h estimate was too
+    -- small and subtabs spilled past the bottom of the panel.
+    sidebar_end_y = cur_y
 end
 
 hide_subtabs = function()
@@ -529,9 +537,14 @@ draw = function()
     local px = trackermenusettings.pos.x
     local py = trackermenusettings.pos.y
 
-    -- Estimate panel height: header + maintab_strip + body
-    -- (body = VISIBLE_ROWS of items, give or take subtab list)
-    local body_h = (VISIBLE_ROWS + 2) * LINE_HEIGHT() + PADDING()
+    -- Panel height = max(items pane needs, sidebar actual end) plus chrome.
+    --
+    -- The sidebar's actual rendered height comes from draw_subtabs() which
+    -- records sidebar_end_y. The items pane needs ~VISIBLE_ROWS lines.
+    -- Pick the larger so the panel encloses both contents without spill.
+    local items_body_h = (VISIBLE_ROWS + 2) * LINE_HEIGHT() + PADDING()
+    local sidebar_body_h = math.max(0, sidebar_end_y - (py + BORDER + HEADER_H + maintab_strip_h))
+    local body_h = math.max(items_body_h, sidebar_body_h + PADDING())
     local total_h = HEADER_H + maintab_strip_h + body_h + BORDER * 2 + PADDING()
     panel_h = total_h
 
@@ -631,23 +644,52 @@ ui.title_text:register_event('drag', function()
     subtabs_drawn = false
 end)
 
--- Mouse wheel: scroll the items pane (right pane) when over the panel.
+-- Mouse handler — handles wheel scroll + blocks right-click camera grab
+-- when the cursor is over the panel. Left-click events pass through
+-- (return false) so the individual texts.new buttons' click handlers
+-- still fire.
+--
+-- Windower mouse types:
+--   0  move    1 LMB down   2 LMB up   3 RMB down   4 RMB up
+--   5  MMB d.  6 MMB up    10 wheel
 windower.register_event('mouse', function(type, x, y, delta, blocked)
-    if not trackermenusettings.visibility then return end
-    if delta and delta ~= 0 then
-        local px = trackermenusettings.pos.x
-        local py = trackermenusettings.pos.y
-        if inside(x, y, px, py, PANEL_W, panel_h) then
-            local items = tabs[active_tab].items
-            local count = #items
-            if delta > 0 then
-                selected = math.max(1, selected - 1)
-            else
-                selected = math.min(count, selected - delta)
-            end
-            clamp_scroll(count)
-            draw()
-            return true
+    if not trackermenusettings.visibility then return false end
+    if blocked then return false end
+    local px = trackermenusettings.pos.x
+    local py = trackermenusettings.pos.y
+    local over = inside(x, y, px, py, PANEL_W, panel_h)
+    if not over then return false end
+
+    -- Mouse wheel: scroll the items pane
+    if type == 10 and delta and delta ~= 0 then
+        local items = tabs[active_tab].items
+        local count = #items
+        if delta > 0 then
+            selected = math.max(1, selected - 1)
+        else
+            selected = math.min(count, selected - delta)
         end
+        clamp_scroll(count)
+        draw()
+        return true
     end
+
+    -- Right-click events: block so FFXI doesn't grab the camera while
+    -- the cursor is over the panel. This is the main camera-go-crazy
+    -- fix — without it, every right-click on the window starts a
+    -- camera-drag in the world behind it.
+    if type == 3 or type == 4 then
+        return true
+    end
+
+    -- Middle-click: block too (FFXI uses middle-click for some default
+    -- camera behaviors and we don't want stray panel clicks to trigger).
+    if type == 5 or type == 6 then
+        return true
+    end
+
+    -- Left-clicks and moves pass through so the texts.new buttons
+    -- (which have their own register_event('left_click') handlers)
+    -- can detect their clicks normally.
+    return false
 end)

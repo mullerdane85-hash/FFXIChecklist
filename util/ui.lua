@@ -292,11 +292,17 @@ initiate_tabs = function()
             scroll         = 0
             sidebar_scroll = 0
             subtabs_drawn  = false
-            -- Hide subtabs of the previously active tab; show this one's
+            -- Hide subtabs of every OTHER main tab so their bgs/labels
+            -- don't render underneath the new active tab's subtabs.
+            -- (Previously this called s.button:hide(), but after the
+            -- refactor to images.new bg + transparent label that field
+            -- no longer exists — the old subtabs were stuck visible.)
             for j, t in ipairs(tabs) do
-                if t.subtabs then
+                if t.subtabs and j ~= i then
                     for _, s in pairs(t.subtabs) do
-                        if j == i then s.button:show() else s.button:hide() end
+                        if s.bg then s.bg:hide() end
+                        if s.label then s.label:hide() end
+                        s.rect = {x = 0, y = 0, w = 0, h = 0}
                     end
                 end
             end

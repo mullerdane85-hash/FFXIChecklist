@@ -7,7 +7,7 @@
 -- preserved. This fork's contributions:
 --
 --   * Renamed addon name + commands (FFXIChecklist / ffxic / checklist).
---   * K-key keyboard toggle (chat-aware: suppressed while chat is open).
+--   * M-key keyboard toggle (chat-aware: suppressed while chat is open).
 --   * UI restyled to match the GSUI-family palette + bumped panel alphas
 --     to ~98% so the overlay reads as a solid window instead of a
 --     translucent text strip.
@@ -419,7 +419,7 @@ local cmds = {
 	help = S{'help','h'},
 	hide = S{'hide'},
 	show = S{'show'},
-	toggle = S{'toggle','t',''},   -- bare //ffxic toggles; matches the K hotkey
+	toggle = S{'toggle','t',''},   -- bare //ffxic toggles; matches the M hotkey
 	copy = S{'copy'},
 	log = S{'log'},
 	showcompleted = S{'showcompleted'},
@@ -892,7 +892,7 @@ windower.register_event('addon command', function(...)
 		trackermenusettings:save()
 		ui.menu:hide()
 	elseif cmds.toggle:contains(arg[1] or '') then
-		-- bare //ffxic / //ffxic toggle / K key → flip current visibility
+		-- bare //ffxic / //ffxic toggle / M key → flip current visibility
 		if trackermenusettings.visibility then
 			trackermenusettings.visibility = false
 			subtabs_drawn = false
@@ -1093,14 +1093,14 @@ windower.register_event('unload', function()
 end)
 
 -- =============================================================================
--- Keyboard toggle — K key. DirectInput scancode 0x25.
--- Skip the toggle while chat is open so typing 'k' in messages still works.
+-- Keyboard toggle — M key. DirectInput scancode 0x32.
+-- Skip the toggle while chat is open so typing 'm' in messages still works.
 -- =============================================================================
-local DIK_K = 0x25
+local DIK_M = 0x32
 windower.register_event('keyboard', function(dik, pressed, flags, blocked)
 	if blocked then return end
 	if not pressed then return end
-	if dik ~= DIK_K then return end
+	if dik ~= DIK_M then return end
 	local info = windower.ffxi.get_info()
 	if info and info.chat_open then return end
 	windower.send_command('ffxic toggle')

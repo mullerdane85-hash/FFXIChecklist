@@ -1,0 +1,12 @@
+# Per-character tracker state (XIchecklist saves a <charname>.xml here).
+# Gitignored so individual progress doesn't get committed.
+data/
+
+# Editor / OS junk
+*.swp
+*.swo
+*~
+*.bak
+Thumbs.db
+Desktop.ini
+.DS_Store

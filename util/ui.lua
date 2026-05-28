@@ -419,6 +419,21 @@ draw_subtabs = function()
     if not trackermenusettings.visibility then return end
     if not subtabs_initiated then return end
 
+    -- Defensive frame-by-frame cleanup: hide every NON-active main tab's
+    -- subtab bg + label, and zero their rects. This is a safety net so
+    -- even if some other code path mishandles tab-switching, ghost
+    -- subtabs can't leak through into the visible UI (which is exactly
+    -- what was causing the runtime errors + visible overlap before).
+    for i, t in ipairs(tabs) do
+        if t.subtabs and i ~= active_tab then
+            for _, s in pairs(t.subtabs) do
+                if s.bg then s.bg:hide() end
+                if s.label then s.label:hide() end
+                s.rect = {x = 0, y = 0, w = 0, h = 0}
+            end
+        end
+    end
+
     local px = trackermenusettings.pos.x
     local py = trackermenusettings.pos.y
     local sx = px + BORDER + PADDING() / 2

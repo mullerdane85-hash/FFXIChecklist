@@ -1216,6 +1216,19 @@ end
 -- Try to load tab_logs from disk into the given target. Returns true on
 -- success. Silently no-ops if the file is missing or malformed -- the
 -- defaults stay in place so the addon continues to function.
+--
+-- Two correctness fixes from a "stale data" bug report:
+--   1. defaulttab_logs is the SOURCE table addon_clear() points tab_logs
+--      at. Directly assigning tab_logs[k] = v therefore mutated the
+--      defaults table too (Lua tables are reference types), so a
+--      second addon_clear() in the same session would "reset" to the
+--      already-polluted defaults.  We now copy field-by-field into a
+--      fresh sub-table.
+--   2. Each per-category load only fills in fields the saved version
+--      had; missing fields (e.g. new fields added in a future release)
+--      keep their defaulttab_logs value. This also defends against
+--      loaded items lists whose schema doesn't match the current
+--      maps/ data files.
 local function load_tab_logs()
 	local path = tab_logs_path()
 	if not path then return false end
@@ -1224,20 +1237,41 @@ local function load_tab_logs()
 	f:close()
 	local ok, loaded = pcall(dofile, path)
 	if not ok or type(loaded) ~= 'table' then return false end
-	-- Merge per-category: keep defaults if the saved file is missing a key
-	-- (so adding new categories in a future release still works).
 	for k, v in pairs(loaded) do
-		if tab_logs[k] then
-			tab_logs[k] = v
+		if tab_logs[k] and type(v) == 'table' then
+			local target = {}
+			for fk, fv in pairs(defaulttab_logs[k] or {}) do target[fk] = fv end
+			for fk, fv in pairs(v) do target[fk] = fv end
+			tab_logs[k] = target
 		end
 	end
 	return true
 end
 
 -- Init & Cleanup
+--
+-- Critical: defaulttab_logs is the PRISTINE source. The previous code
+-- did `tab_logs = defaulttab_logs` which makes them reference the same
+-- Lua table, so every subsequent mutation of tab_logs (load_tab_logs,
+-- xichecklist_updatemenulogs, log_quests, packet handlers...) silently
+-- polluted the defaults too. After a second addon_clear() in the same
+-- session, the "reset" was actually a reset to the already-polluted
+-- state. That manifested as quest / title lists carrying stale entries
+-- from previous loads. We now clone defaulttab_logs one level deep so
+-- the defaults stay untouched.
 addon_clear = function()
-	playertracker = defaultplayertracker
-	tab_logs = defaulttab_logs
+	playertracker = {}
+	for k, v in pairs(defaultplayertracker) do playertracker[k] = v end
+	tab_logs = {}
+	for k, v in pairs(defaulttab_logs) do
+		if type(v) == 'table' then
+			local copy = {}
+			for fk, fv in pairs(v) do copy[fk] = fv end
+			tab_logs[k] = copy
+		else
+			tab_logs[k] = v
+		end
+	end
 	player = nil
 	ui.menu:hide()
 end

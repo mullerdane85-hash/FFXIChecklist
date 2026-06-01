@@ -704,15 +704,44 @@ draw = function()
     -- Items text content
     local text = ''
     local heading = (tabs[active_tab] and tabs[active_tab].name) or ''
+    local active_subtab_name = nil
     if tabs[active_tab] and tabs[active_tab].subtabs
        and active_subtab and active_subtab > 0
        and tabs[active_tab].subtabs[active_subtab] then
         local sn = tabs[active_tab].subtabs[active_subtab].tab
+        active_subtab_name = sn
         if defaulttab_logs[sn] then
             heading = heading .. ' / ' .. defaulttab_logs[sn].name
         end
     end
+
+    -- ----- Completion summary -----
+    -- This is the line under the heading that tells the user:
+    --   * How many entries are in this category total
+    --   * How many they've completed
+    --   * How many are currently HIDDEN by the showcompleted=false filter
+    -- The user reported "everything is mismatched" because completed
+    -- items disappear from the items pane while the sidebar still
+    -- counts them. Spelling out the hidden count here, plus the
+    -- toggle hint, fixes that "wait why is this list so short" feeling.
+    local completed_count, total_count = 0, 0
+    if active_subtab_name and tab_logs[active_subtab_name] then
+        completed_count = tab_logs[active_subtab_name].completed or 0
+        total_count     = tab_logs[active_subtab_name].total or 0
+    end
+
     text = text .. '\\cs(150,210,255)── '..heading..' ──\\cr\n'
+
+    if active_subtab_name and total_count > 0 then
+        local hidden_part = ''
+        if not trackermenusettings.showcompleted and completed_count > 0 then
+            hidden_part = '  \\cs(255,200,120)('..completed_count
+                          ..' completed hidden -- //xic showcompleted to show)\\cr'
+        end
+        text = text .. '\\cs(170,190,210)'..completed_count..' / '..total_count
+                    ..' complete\\cr'..hidden_part..'\n'
+    end
+
     if search_query ~= '' then
         text = text .. '\\cs(255,220,140)Search: "'..search_query..'"'
             ..(search_scope == 'all' and ' (all tabs)' or '')

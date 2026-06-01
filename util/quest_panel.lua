@@ -80,9 +80,11 @@ local HEADER_H= 28
 local SCROLL_BTN_H = 18
 
 -- Vertical distance Arial advances per rendered line at FONT_SZ. Empirically
--- the texts library renders Arial 11 at ~15px line pitch; we use 16 to leave
--- a hair of breathing room so VISIBLE_ROWS is conservative.
-local LINE_H = 16
+-- the texts library renders Arial 11 with stroke at ~18px line pitch (was
+-- 16 originally -- the user reported lines bleeding past the bottom of the
+-- panel because rows-per-height was overestimated). The measure-and-trim
+-- pass in render() catches any remaining slack.
+local LINE_H = 18
 
 -- Word-wrap width. Arial 11 in a 460px panel (minus borders + the 4px gutter
 -- on the body) gives ~440px of usable width. Conservative average char width
@@ -475,13 +477,48 @@ function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
     end
 
     -- ----- Visible slice of body text --------------------------------
+    --
+    -- The math above gives a starting `rows` count, but Arial line pitch
+    -- varies a hair between renders and stroke padding eats a few pixels,
+    -- so a row or two would leak past the bottom border (the user's
+    -- screenshot showed "Home Point #1..." rendering below the chrome).
+    -- After we set the slice, we measure the texts object's actual
+    -- rendered height with extents() and pop one row at a time until it
+    -- fits. We then memoize the trimmed row count so subsequent scroll
+    -- frames don't pay the measure cost.
     ui.body:pos(body_x, body_y)
-    local slice = {}
-    for i = 1, rows do
-        local idx = i + _scroll
-        slice[#slice+1] = _lines[idx] or ''
+    local body_bottom_y = need_scroll
+        and (py + height - BORDER - 4 - SCROLL_BTN_H - 4)
+        or  (py + height - BORDER - 4)
+    local body_h_target = body_bottom_y - body_y
+
+    local function _build_slice(n)
+        local s = {}
+        for i = 1, n do
+            local idx = i + _scroll
+            s[#s+1] = _lines[idx] or ''
+        end
+        return s
     end
-    ui.body:text(table.concat(slice, '\n'))
+
+    ui.body:text(table.concat(_build_slice(rows), '\n'))
+    local _w, mh = ui.body:extents()
+    local guard = 0
+    while mh and mh > body_h_target and rows > 1 and guard < 60 do
+        rows = rows - 1
+        ui.body:text(table.concat(_build_slice(rows), '\n'))
+        _w, mh = ui.body:extents()
+        guard = guard + 1
+    end
+    _visible_rows = rows
+
+    -- Re-clamp scroll now that we know the true visible-row count
+    -- (max_scroll may have decreased).
+    local new_max_scroll = math.max(0, total - rows)
+    if _scroll > new_max_scroll then
+        _scroll = new_max_scroll
+        ui.body:text(table.concat(_build_slice(rows), '\n'))
+    end
 
     -- ----- Hit rect for the mouse wheel handler ----------------------
     _panel_rect = {x = px, y = py, w = PANEL_W, h = height}

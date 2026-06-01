@@ -2,9 +2,11 @@
 -- FFXIChecklist Quest Info Panel
 --
 -- A floating BG-Wiki info panel that auto-renders next to the main panel
--- when the user is browsing a starter-city mission subtab
--- (sandoriamissions / bastokmissions / windurstmissions) and the
--- currently-selected list item maps to a known mission page.
+-- whenever the user is browsing one of the 14 mission subtabs FFXIChecklist
+-- tracks (sandoriamissions / bastokmissions / windurstmissions /
+-- zilartmissions / copmissions / ahturhganmissions / wotgmissions /
+-- acpmissions / mkdmissions / asamissions / soamissions / rovmissions /
+-- tvrmissions / assaults).
 --
 -- Field order (matches user request, top-down):
 --      Starting NPC
@@ -13,10 +15,10 @@
 --      Description
 --      Walkthrough (nested bullets)
 --
--- Lookup: build a reverse map at load time keyed by mission TITLE
--- (e.g. "The Zeruhn Report" -> Bastok 1-1 record). The list items in
--- FFXIChecklist already show the title verbatim, so that gives us a
--- clean key without depending on slot index alignment.
+-- Layout: the panel is a FIXED size locked to the height of the main
+-- FFXIChecklist window. Content that doesn't fit scrolls via the mouse
+-- wheel or the on-panel ▲/▼ arrows. It NEVER grows to fit content -- the
+-- panel chrome stays put, the lines slide.
 -- =============================================================================
 
 local quest_panel = {}
@@ -34,17 +36,9 @@ local subtab_known  = {}   -- subtab name -> true if we have data for it
 local function _norm(s)
     if not s then return '' end
     s = s:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', '')
-    -- Strip leading list-marker noise: dashes, bullets, '>' marker,
-    -- AND the leading underscores that FFXIChecklist's story.lua uses to
-    -- indent mission entries (e.g. '__Resonance' -> 'Resonance').
-    -- Also drop leading apostrophes used for chapter headers
-    -- (e.g. "'Chapter One: Creation and Rebirth'").
     s = s:gsub("^['\"_]+", '')
     s = s:gsub('^[%-%*%>%s]+', ''):gsub('%s+$','')
     s = s:gsub("['\"]+$", '')
-    -- Lowercase + collapse spaces so curly-quote / apostrophe noise
-    -- between FFXIChecklist's stored mission names and BG-Wiki's titles
-    -- can't keep matches from landing.
     s = s:lower():gsub("['`']", "'"):gsub('%s+', ' ')
     return s
 end
@@ -56,14 +50,6 @@ local function _load()
         return
     end
     quest_info = data
-    -- Build reverse lookup. The data file is keyed by FFXIChecklist subtab
-    -- name (e.g. 'bastokmissions', 'soamissions') and inside each, by the
-    -- BG-Wiki page name (e.g. 'Bastok Mission 1-1', 'A Mythril Bullet for
-    -- the General'). We index by:
-    --   * the BG-Wiki page-name key   ("Bastok Mission 1-1")
-    --   * the mission TITLE           ("The Zeruhn Report")
-    --   * normalized variants of both ("the zeruhn report")
-    -- so a click from FFXIChecklist's list (which shows the title) lands.
     for subtab, missions in pairs(quest_info) do
         subtab_known[subtab] = true
         for key, m in pairs(missions) do
@@ -88,28 +74,46 @@ local TITLE_SZ= 13
 local BORDER  = 3
 local PADDING = 8
 local HEADER_H= 28
+local SCROLL_BTN_H = 18
+
+-- Vertical distance Arial advances per rendered line at FONT_SZ. Empirically
+-- the texts library renders Arial 11 at ~15px line pitch; we use 16 to leave
+-- a hair of breathing room so VISIBLE_ROWS is conservative.
+local LINE_H = 16
+
+-- Word-wrap width. Arial 11 in a 460px panel (minus borders + the 4px gutter
+-- on the body) gives ~440px of usable width. Conservative average char width
+-- of 5.5px yields ~75 chars, but Arial's wide caps + punctuation push that
+-- below in practice -- we cap at 52 chars so text always stays inside the
+-- right border, matching the user's bug report about glyphs spilling out.
+local TOOLTIP_WIDTH_CHARS = 52
 
 local C_BORDER     = {alpha = 230, red = 70,  green = 130, blue = 200}
 local C_BG         = {alpha = 250, red = 12,  green = 12,  blue = 32}
 local C_HEADER_BG  = {alpha = 250, red = 22,  green = 36,  blue = 70}
 local C_HEADER_LINE= {alpha = 220, red = 60,  green = 110, blue = 160}
+local C_SCROLL_BG  = {alpha = 230, red = 40,  green = 50,  blue = 90}
+local C_SCROLL_OFF = {alpha = 130, red = 25,  green = 30,  blue = 55}
 
--- Wiki info text colors (match FFXIMissingSpells styling)
-local CS_LABEL     = '\\cs(150,220,255)'   -- cyan field labels
-local CS_VALUE     = '\\cs(230,230,230)'   -- white-ish values
-local CS_HEADER    = '\\cs(255,220,140)'   -- yellow section header
-local CS_BULLET    = '\\cs(180,200,230)'   -- soft blue bullets
-local CS_MUTED     = '\\cs(170,170,170)'   -- muted gray
+local CS_LABEL     = '\\cs(150,220,255)'
+local CS_VALUE     = '\\cs(230,230,230)'
+local CS_HEADER    = '\\cs(255,220,140)'
+local CS_BULLET    = '\\cs(180,200,230)'
+local CS_MUTED     = '\\cs(170,170,170)'
 local CS_END       = '\\cr'
 
-local TOOLTIP_WIDTH_CHARS = 60
-
 -- ---------------------------------------------------------------------------
--- UI objects
+-- UI objects + state
 -- ---------------------------------------------------------------------------
 local ui = {}
-local _visible = false
-local _last_title = nil  -- so we only rebuild text when the selection changes
+local _visible      = false
+local _last_key     = nil    -- the rec.key whose lines are currently cached
+local _lines        = {}     -- cached formatted line array for _last_key
+local _scroll       = 0      -- top-of-window line index (0 = first line)
+local _visible_rows = 1      -- how many lines fit per panel height
+local _panel_rect   = {x = 0, y = 0, w = 0, h = 0}   -- screen-space hit rect
+local _up_rect      = {x = 0, y = 0, w = 0, h = 0}
+local _dn_rect      = {x = 0, y = 0, w = 0, h = 0}
 
 local function _mk_bg(c)
     return images.new({
@@ -143,6 +147,26 @@ local function _init_ui()
         bg = {alpha = 0}, padding = PADDING,
         flags = {draggable = false},
     })
+
+    ui.scroll_up = texts.new('', {
+        pos = {x = 0, y = 0},
+        text = {font = FONT, size = FONT_SZ, red = 255, green = 255, blue = 255,
+                stroke = {width = 1, alpha = 180, red = 0, green = 0, blue = 0}},
+        bg = {red = C_SCROLL_BG.red, green = C_SCROLL_BG.green,
+              blue = C_SCROLL_BG.blue, alpha = C_SCROLL_BG.alpha},
+        padding = 4, flags = {draggable = false, bold = true},
+    })
+    ui.scroll_up:text('  \\cs(200,220,255)▲  Scroll Up  ▲\\cr  ')
+
+    ui.scroll_dn = texts.new('', {
+        pos = {x = 0, y = 0},
+        text = {font = FONT, size = FONT_SZ, red = 255, green = 255, blue = 255,
+                stroke = {width = 1, alpha = 180, red = 0, green = 0, blue = 0}},
+        bg = {red = C_SCROLL_BG.red, green = C_SCROLL_BG.green,
+              blue = C_SCROLL_BG.blue, alpha = C_SCROLL_BG.alpha},
+        padding = 4, flags = {draggable = false, bold = true},
+    })
+    ui.scroll_dn:text('  \\cs(200,220,255)▼  Scroll Down  ▼\\cr  ')
 end
 
 local function _show()
@@ -160,17 +184,22 @@ local function _hide()
     ui.border_left:hide(); ui.border_rite:hide()
     ui.header_bg:hide(); ui.header_line:hide()
     ui.title:hide(); ui.body:hide()
+    if ui.scroll_up then ui.scroll_up:hide() end
+    if ui.scroll_dn then ui.scroll_dn:hide() end
     _visible = false
+    _panel_rect = {x = 0, y = 0, w = 0, h = 0}
+    _up_rect    = {x = 0, y = 0, w = 0, h = 0}
+    _dn_rect    = {x = 0, y = 0, w = 0, h = 0}
 end
 
 -- ---------------------------------------------------------------------------
 -- Text wrapping helper. Word-wraps a long paragraph into multiple lines
--- of <= width chars, prefixed with `prefix` on the first line and
--- `cont` on continuation lines.
+-- of <= width chars (excluding color escapes), prefixed with `prefix` on
+-- the first line and `cont` on continuation lines.
 -- ---------------------------------------------------------------------------
 local function _wrap_line(text, width, prefix, cont)
     prefix = prefix or ''
-    cont   = cont or string.rep(' ', #prefix)
+    cont   = cont or ''
     local out = {}
     if not text or text == '' then return out end
     local rest = text
@@ -190,29 +219,37 @@ local function _wrap_line(text, width, prefix, cont)
     return out
 end
 
--- ---------------------------------------------------------------------------
--- Render a quest_info record into text. Returns the formatted string.
--- ---------------------------------------------------------------------------
 local function _emit_field(lines, label, value)
     if not value or value == '' then return end
-    local prefix = CS_LABEL .. label .. ': ' .. CS_END .. CS_VALUE
-    local wrapped = _wrap_line(value, TOOLTIP_WIDTH_CHARS,
-                               prefix, CS_VALUE .. string.rep(' ', #label + 2))
-    for _, l in ipairs(wrapped) do
-        lines[#lines+1] = l .. CS_END
+    local lead   = label .. ': '
+    local prefix = CS_LABEL .. lead .. CS_END .. CS_VALUE
+    local cont   = CS_VALUE .. string.rep(' ', #lead)
+    local body_w = TOOLTIP_WIDTH_CHARS - #lead
+    if body_w < 16 then body_w = 16 end
+    local first_chunk = value:sub(1, body_w)
+    local rest        = value:sub(#first_chunk + 1):gsub('^%s+','')
+    local wrapped = {}
+    -- First line keeps prefix; subsequent lines align under the value.
+    wrapped[1] = prefix .. first_chunk
+    if #rest > 0 then
+        local cont_wrap = _wrap_line(rest, body_w, cont, cont)
+        for _, l in ipairs(cont_wrap) do wrapped[#wrapped+1] = l end
     end
+    for _, l in ipairs(wrapped) do lines[#lines+1] = l .. CS_END end
 end
 
 local function _emit_walk(lines, items, depth)
     depth = depth or 0
     local indent = string.rep('   ', depth)
     local bullet = (depth == 0) and '* ' or '- '
+    local lead   = indent .. bullet
     for _, entry in ipairs(items) do
         local text = entry[1] or ''
-        local prefix = CS_BULLET .. indent .. bullet .. CS_END .. CS_VALUE
-        local cont   = CS_VALUE .. indent .. string.rep(' ', #bullet)
-        local wrapped = _wrap_line(text, TOOLTIP_WIDTH_CHARS - (#indent + #bullet),
-                                   prefix, cont)
+        local body_w = TOOLTIP_WIDTH_CHARS - #lead
+        if body_w < 16 then body_w = 16 end
+        local prefix = CS_BULLET .. lead .. CS_END .. CS_VALUE
+        local cont   = CS_VALUE .. string.rep(' ', #lead)
+        local wrapped = _wrap_line(text, body_w, prefix, cont)
         for _, l in ipairs(wrapped) do
             lines[#lines+1] = l .. CS_END
         end
@@ -222,109 +259,88 @@ local function _emit_walk(lines, items, depth)
     end
 end
 
-local function _format(rec)
+-- Build the formatted line array for a record.
+local function _build_lines(rec)
     local d = rec.data
-    local lines = {}
+    local L = {}
 
-    -- Header: "Bastok Mission 1-1 - The Zeruhn Report"
-    local hdr = (d.title and d.title ~= '' and d.title) or rec.key
-    lines[#lines+1] = CS_HEADER .. rec.key .. CS_END
-    if d.title and d.title ~= rec.key then
-        lines[#lines+1] = CS_HEADER .. '   "' .. d.title .. '"' .. CS_END
+    L[#L+1] = CS_HEADER .. rec.key .. CS_END
+    if d.title and d.title ~= rec.key and d.title ~= '' then
+        L[#L+1] = CS_HEADER .. '   "' .. d.title .. '"' .. CS_END
     end
-    lines[#lines+1] = ''
+    L[#L+1] = ''
 
-    -- Top-of-card fields (user-specified order: Starting NPC first).
-    _emit_field(lines, 'Starting NPC', d.starting_npc)
+    -- Field order: Starting NPC -> Title -> Repeatable (assault extras) -> Description -> Walkthrough
+    _emit_field(L, 'Starting NPC', d.starting_npc)
     if d.subtitle and d.subtitle ~= '' and d.subtitle ~= 'None' then
-        _emit_field(lines, 'Title', d.subtitle)
+        _emit_field(L, 'Title', d.subtitle)
     else
-        _emit_field(lines, 'Title', d.subtitle == '' and nil or d.subtitle)
+        _emit_field(L, 'Title', d.subtitle == '' and nil or d.subtitle)
     end
-    _emit_field(lines, 'Repeatable', d.repeatable)
-    -- Assault-specific fields (present only on Category:Assault pages,
-    -- absent on regular mission pages so they just skip).
-    _emit_field(lines, 'Assault Rank',   d.assault_rank)
-    _emit_field(lines, 'Time Limit',     d.time_limit)
-    _emit_field(lines, 'Recommended Lv', d.recommended_lv)
-    _emit_field(lines, 'Mission Orders', d.mission_orders)
-    lines[#lines+1] = ''
-    _emit_field(lines, 'Description', d.description)
-    lines[#lines+1] = ''
+    _emit_field(L, 'Repeatable',     d.repeatable)
+    _emit_field(L, 'Assault Rank',   d.assault_rank)
+    _emit_field(L, 'Time Limit',     d.time_limit)
+    _emit_field(L, 'Recommended Lv', d.recommended_lv)
+    _emit_field(L, 'Mission Orders', d.mission_orders)
+    L[#L+1] = ''
+    _emit_field(L, 'Description', d.description)
+    L[#L+1] = ''
 
-    -- Walkthrough
     if d.walkthrough and #d.walkthrough > 0 then
-        lines[#lines+1] = CS_HEADER .. 'Walkthrough' .. CS_END
-        _emit_walk(lines, d.walkthrough, 0)
+        L[#L+1] = CS_HEADER .. 'Walkthrough' .. CS_END
+        _emit_walk(L, d.walkthrough, 0)
     end
 
-    -- Footer: series + prev/next (faded)
     if d.series and d.series ~= '' then
-        lines[#lines+1] = ''
-        lines[#lines+1] = CS_MUTED .. 'Series: ' .. d.series .. CS_END
+        L[#L+1] = ''
+        L[#L+1] = CS_MUTED .. 'Series: ' .. d.series .. CS_END
     end
 
-    return table.concat(lines, '\n')
+    return L
 end
 
 -- ---------------------------------------------------------------------------
--- Public: lookup record by mission title (or page key).
+-- Public: lookup record by mission title or page key.
 -- ---------------------------------------------------------------------------
 function quest_panel.lookup(title)
     if not title or title == '' then return nil end
-    -- Strip color escapes that may surround the item text.
-    local clean = title:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', ''):gsub('^%s+',''):gsub('%s+$','')
-    -- Strip a leading "- " or "* " or "> " that the items pane may have added.
+    local clean = title:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', '')
+                        :gsub('^%s+',''):gsub('%s+$','')
     clean = clean:gsub('^[%-%*%>%s]+', '')
-    -- Try exact match first, then normalized fallback.
     return title_index[clean] or title_index[_norm(clean)]
 end
 
 -- ---------------------------------------------------------------------------
--- Public: render the panel for the given record next to the main panel.
--- Pass nil to hide.
+-- Render the panel at fixed size next to the main window.
 -- ---------------------------------------------------------------------------
 function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
     _init_ui()
     if not rec then
-        _hide()
-        _last_title = nil
+        _hide(); _last_key = nil; _lines = {}; _scroll = 0
         return
     end
 
-    -- Position next to the main panel, clamped to the screen.
-    --
-    -- Preferred: right of the main panel. If the panel would overflow
-    -- the right edge of the screen, fall back to the LEFT side. If even
-    -- that won't fit (tiny resolution), clamp to whichever edge has more
-    -- room. Then clamp Y so the panel doesn't slide off the bottom.
+    -- ----- Fixed panel size: locks to the main window's current height.
+    --       Never grows or shrinks to content; we scroll instead. --------
     local res = windower.get_windower_settings()
     local screen_w = (res and res.ui_x_res) or 1920
     local screen_h = (res and res.ui_y_res) or 1080
 
-    -- Estimate panel height from the body text line count, so a long
-    -- walkthrough doesn't spill past the bottom border. We rebuild the
-    -- text up-front (cheap; only done when selection changes anyway)
-    -- and count newlines to size the chrome.
-    local body_text = _format(rec)
-    local n_lines = 1
-    for _ in body_text:gmatch('\n') do n_lines = n_lines + 1 end
-    local line_h = FONT_SZ + 6                            -- approx line height
-    local content_h = HEADER_H + PADDING * 2 + (n_lines * line_h)
-    local height = math.max(main_panel_h, content_h, 280)
-    -- Cap to screen height so we never exceed the display.
+    local height = main_panel_h or 400
     if height > screen_h - 20 then height = screen_h - 20 end
-    local gap = 6
+    if height < 200 then height = 200 end
 
+    -- ----- Horizontal placement: prefer right, fall back to left,
+    --       clamp to edge on tiny screens. ------------------------------
+    local gap = 6
     local right_px = anchor_x + main_panel_w + gap
     local left_px  = anchor_x - PANEL_W - gap
     local px
     if right_px + PANEL_W <= screen_w then
-        px = right_px                                       -- prefer right side
+        px = right_px
     elseif left_px >= 0 then
-        px = left_px                                        -- fall back to left
+        px = left_px
     else
-        -- Tiny screen: pin to whichever side has more room.
         local space_right = screen_w - (anchor_x + main_panel_w + gap)
         local space_left  = anchor_x - gap
         if space_right >= space_left then
@@ -334,12 +350,11 @@ function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
         end
     end
 
-    -- Clamp Y so the panel stays on-screen vertically.
     local py = anchor_y
     if py + height > screen_h then py = math.max(0, screen_h - height) end
     if py < 0 then py = 0 end
 
-    -- Background
+    -- ----- Chrome ------------------------------------------------------
     ui.bg:pos(px, py); ui.bg:size(PANEL_W, height)
     ui.border_top:pos(px, py); ui.border_top:size(PANEL_W, BORDER)
     ui.border_bot:pos(px, py + height - BORDER); ui.border_bot:size(PANEL_W, BORDER)
@@ -354,36 +369,95 @@ function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
                  py + BORDER + math.floor((HEADER_H - TITLE_SZ) / 2))
     ui.title:text('Quest Info - ' .. rec.key)
 
-    ui.body:pos(px + BORDER + 2, py + BORDER + HEADER_H + 4)
+    -- ----- Body region geometry ---------------------------------------
+    local body_x = px + BORDER + 2
+    local body_y = py + BORDER + HEADER_H + 4
+    local body_h_avail = height - HEADER_H - BORDER * 2 - 8
 
-    -- Body text was already built up-front (so we could measure its
-    -- height). Push it into the texts object only when the selection
-    -- actually changes to avoid re-rendering identical text every frame.
-    if rec.key ~= _last_title then
-        ui.body:text(body_text)
-        _last_title = rec.key
+    -- Rebuild lines only when selection changes; reset scroll too.
+    if rec.key ~= _last_key then
+        _lines    = _build_lines(rec)
+        _last_key = rec.key
+        _scroll   = 0
     end
+
+    local total = #_lines
+    -- Compute how many lines fit, leaving room for the scroll buttons
+    -- when scrolling is actually needed.
+    local rows_no_scroll = math.max(1, math.floor(body_h_avail / LINE_H))
+    local need_scroll    = total > rows_no_scroll
+    local rows
+    if need_scroll then
+        local room = body_h_avail - (SCROLL_BTN_H + 4) * 2
+        rows = math.max(1, math.floor(room / LINE_H))
+    else
+        rows = rows_no_scroll
+    end
+    _visible_rows = rows
+
+    -- Clamp scroll to valid range.
+    local max_scroll = math.max(0, total - rows)
+    if _scroll > max_scroll then _scroll = max_scroll end
+    if _scroll < 0 then _scroll = 0 end
+
+    -- ----- Scroll arrows ----------------------------------------------
+    if need_scroll then
+        ui.scroll_up:pos(body_x, body_y)
+        ui.scroll_up:visible(true)
+        local uw, uh = ui.scroll_up:extents()
+        uw = uw or 140; uh = uh or SCROLL_BTN_H
+        _up_rect = {x = body_x, y = body_y, w = uw, h = uh}
+        body_y = body_y + uh + 4
+
+        ui.scroll_dn:visible(true)
+        local dw, dh = ui.scroll_dn:extents()
+        dw = dw or 140; dh = dh or SCROLL_BTN_H
+        local dn_y = py + height - BORDER - dh - 4
+        ui.scroll_dn:pos(body_x, dn_y)
+        _dn_rect = {x = body_x, y = dn_y, w = dw, h = dh}
+
+        -- Fade the inactive arrow.
+        if _scroll <= 0 then
+            ui.scroll_up:bg_alpha(C_SCROLL_OFF.alpha)
+        else
+            ui.scroll_up:bg_alpha(C_SCROLL_BG.alpha)
+        end
+        if _scroll >= max_scroll then
+            ui.scroll_dn:bg_alpha(C_SCROLL_OFF.alpha)
+        else
+            ui.scroll_dn:bg_alpha(C_SCROLL_BG.alpha)
+        end
+    else
+        ui.scroll_up:hide()
+        ui.scroll_dn:hide()
+        _up_rect = {x = 0, y = 0, w = 0, h = 0}
+        _dn_rect = {x = 0, y = 0, w = 0, h = 0}
+    end
+
+    -- ----- Visible slice of body text --------------------------------
+    ui.body:pos(body_x, body_y)
+    local slice = {}
+    for i = 1, rows do
+        local idx = i + _scroll
+        slice[#slice+1] = _lines[idx] or ''
+    end
+    ui.body:text(table.concat(slice, '\n'))
+
+    -- ----- Hit rect for the mouse wheel handler ----------------------
+    _panel_rect = {x = px, y = py, w = PANEL_W, h = height}
 
     _show()
 end
 
 function quest_panel.hide()
     _hide()
-    _last_title = nil
+    _last_key = nil; _lines = {}; _scroll = 0
 end
 
 -- ---------------------------------------------------------------------------
--- Public: integration hook called every prerender by ui.lua.
--- Decides whether to show/hide based on active subtab + selected item.
+-- Public hook called every prerender by ui.lua.
 -- ---------------------------------------------------------------------------
 function quest_panel.tick(opts)
-    -- opts:
-    --   visible        bool   panel visibility (from main visibility check)
-    --   subtab_name    string current active subtab name (e.g. 'bastokmissions')
-    --   selected_text  string text of the currently-selected items row
-    --   anchor_x/y     int    main panel top-left
-    --   panel_w/h      int    main panel size
-    --   show_wiki      bool   user toggle (sidebar checkbox / setting)
     if not opts or not opts.visible or not opts.show_wiki then
         _hide(); return
     end
@@ -398,13 +472,59 @@ function quest_panel.tick(opts)
 end
 
 -- ---------------------------------------------------------------------------
+-- Mouse handler. Consumes wheel events over the panel + click-to-scroll
+-- on the ▲/▼ buttons. ui.lua already owns the main panel's mouse handler;
+-- ours is independent and only acts when the cursor is over OUR rect.
+--   type:   0 move | 1 LMB down | 2 LMB up | 10 wheel
+--   delta:  +1 wheel up | -1 wheel down (Windower convention)
+-- ---------------------------------------------------------------------------
+windower.register_event('mouse', function(type, x, y, delta, blocked)
+    if blocked then return false end
+    if not _visible then return false end
+    local r = _panel_rect
+    local over_panel = (x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h)
+    if not over_panel then return false end
+
+    if type == 10 and delta and delta ~= 0 then
+        local total = #_lines
+        local max_scroll = math.max(0, total - _visible_rows)
+        if delta > 0 then
+            _scroll = math.max(0, _scroll - 2)
+        else
+            _scroll = math.min(max_scroll, _scroll + 2)
+        end
+        return true
+    end
+
+    if type == 1 then
+        local u = _up_rect
+        if u.w > 0 and x >= u.x and x <= u.x + u.w
+                  and y >= u.y and y <= u.y + u.h then
+            _scroll = math.max(0, _scroll - math.max(1, math.floor(_visible_rows / 2)))
+            return true
+        end
+        local d = _dn_rect
+        if d.w > 0 and x >= d.x and x <= d.x + d.w
+                  and y >= d.y and y <= d.y + d.h then
+            local total = #_lines
+            local max_scroll = math.max(0, total - _visible_rows)
+            _scroll = math.min(max_scroll, _scroll + math.max(1, math.floor(_visible_rows / 2)))
+            return true
+        end
+    end
+
+    -- Consume the click anywhere over the panel so it doesn't fall
+    -- through to the game world (matches ui.lua's main-panel behavior).
+    if type == 1 or type == 3 or type == 5 then return true end
+    return false
+end)
+
+-- ---------------------------------------------------------------------------
 -- Load on require()
 -- ---------------------------------------------------------------------------
 _load()
 
 function quest_panel.is_starter(subtab_name)
-    -- Retained for back-compat. Returns true if we have wiki data for
-    -- this subtab regardless of whether it's a "starter city" mission.
     return subtab_known[subtab_name] == true
 end
 
@@ -416,7 +536,7 @@ function quest_panel.reload()
     title_index  = {}
     subtab_known = {}
     _load()
-    _last_title = nil
+    _last_key = nil; _lines = {}; _scroll = 0
 end
 
 return quest_panel

@@ -36,7 +36,10 @@ local subtab_known  = {}   -- subtab name -> true if we have data for it
 local function _norm(s)
     if not s then return '' end
     s = s:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', '')
-    s = s:gsub("^['\"_]+", '')
+    -- Strip leading list-marker noise FFXIChecklist's story.lua uses for
+    -- visual grouping: underscores (RoV indent), apostrophes (chapter
+    -- header), plus-prefix (quest groups), regular dashes/bullets.
+    s = s:gsub("^[%+'\"_]+", '')
     s = s:gsub('^[%-%*%>%s]+', ''):gsub('%s+$','')
     s = s:gsub("['\"]+$", '')
     s = s:lower():gsub("['`']", "'"):gsub('%s+', ' ')
@@ -260,30 +263,59 @@ local function _emit_walk(lines, items, depth)
 end
 
 -- Build the formatted line array for a record.
+-- Renders both mission AND quest schemas; absent fields just skip.
 local function _build_lines(rec)
     local d = rec.data
     local L = {}
 
+    -- Header: page key + mission/quest title in quotes if distinct.
     L[#L+1] = CS_HEADER .. rec.key .. CS_END
     if d.title and d.title ~= rec.key and d.title ~= '' then
         L[#L+1] = CS_HEADER .. '   "' .. d.title .. '"' .. CS_END
     end
     L[#L+1] = ''
 
-    -- Field order: Starting NPC -> Title -> Repeatable (assault extras) -> Description -> Walkthrough
+    -- Field order locked to the user's spec:
+    --   Starting NPC -> Title -> Repeatable -> (quest extras)
+    --   -> Description -> Note -> Walkthrough -> footer
     _emit_field(L, 'Starting NPC', d.starting_npc)
     if d.subtitle and d.subtitle ~= '' and d.subtitle ~= 'None' then
         _emit_field(L, 'Title', d.subtitle)
     else
         _emit_field(L, 'Title', d.subtitle == '' and nil or d.subtitle)
     end
-    _emit_field(L, 'Repeatable',     d.repeatable)
-    _emit_field(L, 'Assault Rank',   d.assault_rank)
-    _emit_field(L, 'Time Limit',     d.time_limit)
-    _emit_field(L, 'Recommended Lv', d.recommended_lv)
-    _emit_field(L, 'Mission Orders', d.mission_orders)
+    _emit_field(L, 'Repeatable',        d.repeatable)
+    -- Quest-specific fields (from Category:Quests pages).
+    _emit_field(L, 'Required Fame',     d.required_fame)
+    _emit_field(L, 'Level Restriction', d.level_restriction)
+    _emit_field(L, 'Pack',              d.pack)
+    _emit_field(L, 'Requirements',      d.requirements)
+    _emit_field(L, 'Rewards',           d.rewards)
+    -- Assault-specific fields (from Category:Assault pages).
+    _emit_field(L, 'Assault Rank',      d.assault_rank)
+    _emit_field(L, 'Time Limit',        d.time_limit)
+    _emit_field(L, 'Recommended Lv',    d.recommended_lv)
+    _emit_field(L, 'Mission Orders',    d.mission_orders)
     L[#L+1] = ''
     _emit_field(L, 'Description', d.description)
+
+    if d.note and d.note ~= '' then
+        L[#L+1] = ''
+        -- Highlight the note label in red to match BG-Wiki's styling.
+        local lead   = 'Note: '
+        local prefix = '\\cs(255,90,90)' .. lead .. CS_END .. CS_VALUE
+        local cont   = CS_VALUE .. string.rep(' ', #lead)
+        local body_w = TOOLTIP_WIDTH_CHARS - #lead
+        if body_w < 16 then body_w = 16 end
+        local first_chunk = d.note:sub(1, body_w)
+        local rest        = d.note:sub(#first_chunk + 1):gsub('^%s+','')
+        L[#L+1] = prefix .. first_chunk .. CS_END
+        if #rest > 0 then
+            for _, l in ipairs(_wrap_line(rest, body_w, cont, cont)) do
+                L[#L+1] = l .. CS_END
+            end
+        end
+    end
     L[#L+1] = ''
 
     if d.walkthrough and #d.walkthrough > 0 then
@@ -291,9 +323,16 @@ local function _build_lines(rec)
         _emit_walk(L, d.walkthrough, 0)
     end
 
+    -- Footer.
     if d.series and d.series ~= '' then
         L[#L+1] = ''
         L[#L+1] = CS_MUTED .. 'Series: ' .. d.series .. CS_END
+    end
+    if d.previous_quest and d.previous_quest ~= '' and d.previous_quest ~= 'None' then
+        L[#L+1] = CS_MUTED .. 'Previous Quest: ' .. d.previous_quest .. CS_END
+    end
+    if d.next_quest and d.next_quest ~= '' and d.next_quest ~= 'None' then
+        L[#L+1] = CS_MUTED .. 'Next Quest: ' .. d.next_quest .. CS_END
     end
 
     return L
@@ -306,7 +345,8 @@ function quest_panel.lookup(title)
     if not title or title == '' then return nil end
     local clean = title:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', '')
                         :gsub('^%s+',''):gsub('%s+$','')
-    clean = clean:gsub('^[%-%*%>%s]+', '')
+    -- Also drop leading + that FFXIChecklist uses on some quest groupings.
+    clean = clean:gsub('^[%-%*%>%+%s]+', '')
     return title_index[clean] or title_index[_norm(clean)]
 end
 

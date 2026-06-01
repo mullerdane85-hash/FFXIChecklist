@@ -42,6 +42,7 @@ trackermenusettings.pos.y = 80
 trackermenusettings.visibility = true
 trackermenusettings.showcompleted = false -- true = display completed items listed in green
 trackermenusettings.showexcluded = false -- true = display hidden RoEs and excluded Titles and Crafting shield KIs
+trackermenusettings.showwikiinfo = true  -- true = show BG-Wiki Quest Info side-panel on starter mission subtabs
 
 trackermenusettings = config.load(trackermenusettings)
 
@@ -424,6 +425,7 @@ local cmds = {
 	log = S{'log'},
 	showcompleted = S{'showcompleted'},
 	showexcluded = S{'showexcluded'},
+	showwikiinfo = S{'showwikiinfo','wiki','questinfo'},
 	scale = S{'scale'},
 }
 
@@ -863,6 +865,7 @@ windower.register_event('addon command', function(...)
 		windower.add_to_chat(161,'//xic copy to copy current tab to clipboard')
 		windower.add_to_chat(161,'//xic showcompleted to toggle show completed items on-off')
 		windower.add_to_chat(161,'//xic showexcluded to toggle show hidden RoE/Titles items on-off')
+		windower.add_to_chat(161,'//xic wiki to toggle BG-Wiki quest info panel (starter missions)')
 		windower.add_to_chat(161,'//xic log <category> to log in chat')
 		windower.add_to_chat(161,'==== ==== ==== ====')
 		windower.add_to_chat(161,'Require zoning to update Quests / Warps / Monstrosity / MMM')
@@ -916,6 +919,12 @@ windower.register_event('addon command', function(...)
 		util.addon_log('showexcluded: '..tostring(trackermenusettings.showexcluded))
 		trackermenusettings:save()
 		xichecklist_updatemenulogs()
+		draw()
+	elseif cmds.showwikiinfo:contains(arg[1]) then
+		trackermenusettings.showwikiinfo = not trackermenusettings.showwikiinfo
+		util.addon_log('showwikiinfo: '..tostring(trackermenusettings.showwikiinfo))
+		trackermenusettings:save()
+		if quest_panel and not trackermenusettings.showwikiinfo then quest_panel.hide() end
 		draw()
 	elseif cmds.copy:contains(arg[1]) then
 		windower.copy_to_clipboard(util.table_to_clipboard(tabs[active_tab].items))

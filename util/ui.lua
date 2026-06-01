@@ -23,6 +23,14 @@
 texts  = require('util/texts')
 images = require('images')
 
+-- Optional BG-Wiki quest info side-panel. Loaded lazily so the addon
+-- still functions if the data file is missing.
+quest_panel = nil
+do
+    local ok, mod = pcall(require, 'util/quest_panel')
+    if ok and type(mod) == 'table' then quest_panel = mod end
+end
+
 -- =============================================================================
 -- Constants
 -- =============================================================================
@@ -744,11 +752,57 @@ windower.register_event('prerender', function()
     elseif (not is_visible) and _was_visible then
         ui_hide_all()
         _was_visible = false
+        if quest_panel then quest_panel.hide() end
     end
-    if not is_visible then return end
+    if not is_visible then
+        if quest_panel then quest_panel.hide() end
+        return
+    end
     draw_tabs()
     draw_subtabs()
     draw()
+
+    -- BG-Wiki quest info side-panel. Renders only when:
+    --   * the user-level toggle is on
+    --   * the active subtab is a starter-city mission tab
+    --   * the currently-selected item maps to a known mission page
+    if quest_panel then
+        local subtab_name, sel_text = nil, nil
+        if tabs[active_tab] and tabs[active_tab].subtabs
+           and active_subtab and active_subtab > 0
+           and tabs[active_tab].subtabs[active_subtab] then
+            subtab_name = tabs[active_tab].subtabs[active_subtab].tab
+        end
+        local items = tabs[active_tab].items
+        if items and items[selected] then
+            sel_text = items[selected].text
+        end
+        -- If the currently-selected row is a header / non-quest row
+        -- (very common right after switching subtabs, since selected
+        -- defaults to 1 which is the "==== Bastok Missions ====" header),
+        -- fall back to the first item that does map to a known mission so
+        -- the wiki panel still has something useful to show.
+        if quest_panel and quest_panel.is_starter(subtab_name)
+           and items and not (quest_panel.lookup(sel_text)) then
+            for idx = 1, #items do
+                local t = items[idx] and items[idx].text
+                if quest_panel.lookup(t) then
+                    sel_text = t
+                    break
+                end
+            end
+        end
+        quest_panel.tick({
+            visible       = true,
+            show_wiki     = (trackermenusettings.showwikiinfo == true),
+            subtab_name   = subtab_name,
+            selected_text = sel_text,
+            anchor_x      = trackermenusettings.pos.x,
+            anchor_y      = trackermenusettings.pos.y,
+            panel_w       = PANEL_W,
+            panel_h       = panel_h,
+        })
+    end
 end)
 
 -- (Drag is handled inside the global mouse handler below — it picks up

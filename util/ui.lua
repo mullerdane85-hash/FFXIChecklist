@@ -724,8 +724,20 @@ initiate_tabs()
 -- Visibility state machine: explicit show/hide on transition.
 local _was_visible = false
 
+-- Login-screen guard. windower.ffxi.get_info().logged_in is true only when the
+-- character is actually in the game world; while sitting at character-select
+-- or the launcher we suppress the panel entirely so it doesn't render on top
+-- of the login UI. The user's saved visibility preference
+-- (trackermenusettings.visibility) is preserved -- this just temporarily
+-- overrides it whenever there's no logged-in character.
+local function _player_in_game()
+    local info = windower.ffxi.get_info()
+    return info and info.logged_in == true
+end
+
 windower.register_event('prerender', function()
-    local is_visible = trackermenusettings.visibility == true
+    local is_visible = (trackermenusettings.visibility == true)
+                      and _player_in_game()
     if is_visible and not _was_visible then
         ui_show_all()
         _was_visible = true

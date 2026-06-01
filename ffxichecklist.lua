@@ -1067,6 +1067,113 @@ windower.register_event('addon command', function(...)
 	end
 end)
 
+-- =============================================================================
+-- tab_logs persistence
+-- =============================================================================
+-- The addon's "tab_logs" table holds the per-category completion data that's
+-- normally populated only by incoming-packet handlers (zone change, mission
+-- log refresh, etc.). Without persistence the tables reset to defaults on
+-- every /lua reload, forcing the user to zone-and-trigger every category just
+-- to repopulate the panel. Persist a snapshot to data/<charname>_tablogs.lua
+-- after each zone-change-driven update; load it on init.
+--
+-- Format: a single Lua file `return { ... }` -- portable across Windower
+-- versions and trivially round-trippable. The save is throttled so a
+-- packet burst can't pin the disk; coroutine.schedule(save, N) collapses
+-- N-second-window writes into a single save.
+local LUA_TABLE_FMT_FAILED = false
+local function tab_logs_path()
+	local pl = windower.ffxi.get_player()
+	if not pl or not pl.name then return nil end
+	return windower.addon_path .. 'data/' .. pl.name .. '_tablogs.lua'
+end
+
+-- Serialize a Lua value to a string we can `return` from a file.
+-- Handles tables (recursively), strings, numbers, booleans, nil.
+-- Falls back to ignoring unsupported types so a single bad entry can't
+-- block the whole save. Cycles aren't expected in tab_logs but guarded
+-- against just in case.
+local function serialize_lua(value, seen, indent)
+	seen   = seen   or {}
+	indent = indent or ''
+	local t = type(value)
+	if t == 'nil' or t == 'boolean' or t == 'number' then return tostring(value) end
+	if t == 'string' then return string.format('%q', value) end
+	if t ~= 'table' then return 'nil' end
+	if seen[value] then return 'nil --[[cycle]]' end
+	seen[value] = true
+	local next_indent = indent .. '  '
+	local parts = {'{'}
+	-- Array part first (1..n)
+	local n = #value
+	for i = 1, n do
+		parts[#parts+1] = next_indent .. serialize_lua(value[i], seen, next_indent) .. ','
+	end
+	-- Hash part (skip integer keys we already emitted)
+	for k, v in pairs(value) do
+		if not (type(k) == 'number' and k >= 1 and k <= n and k == math.floor(k)) then
+			local key_s
+			if type(k) == 'string' and k:match('^[A-Za-z_][A-Za-z0-9_]*$') then
+				key_s = k
+			else
+				key_s = '[' .. serialize_lua(k, seen, next_indent) .. ']'
+			end
+			parts[#parts+1] = next_indent .. key_s .. ' = ' .. serialize_lua(v, seen, next_indent) .. ','
+		end
+	end
+	parts[#parts+1] = indent .. '}'
+	return table.concat(parts, '\n')
+end
+
+local _save_scheduled = false
+local function save_tab_logs()
+	local path = tab_logs_path()
+	if not path or not tab_logs then return end
+	local body = 'return ' .. serialize_lua(tab_logs)
+	local f, err = io.open(path, 'w')
+	if not f then
+		if not LUA_TABLE_FMT_FAILED then
+			util.addon_log('tab_logs save failed: ' .. tostring(err))
+			LUA_TABLE_FMT_FAILED = true
+		end
+		return
+	end
+	f:write(body)
+	f:close()
+end
+
+-- Debounce: schedule a save 5s in the future and collapse further calls.
+-- Packet bursts (zone change unrolls 20+ chunks) become one disk write.
+schedule_tab_logs_save = function()
+	if _save_scheduled then return end
+	_save_scheduled = true
+	coroutine.schedule(function()
+		_save_scheduled = false
+		save_tab_logs()
+	end, 5)
+end
+
+-- Try to load tab_logs from disk into the given target. Returns true on
+-- success. Silently no-ops if the file is missing or malformed -- the
+-- defaults stay in place so the addon continues to function.
+local function load_tab_logs()
+	local path = tab_logs_path()
+	if not path then return false end
+	local f = io.open(path, 'r')
+	if not f then return false end
+	f:close()
+	local ok, loaded = pcall(dofile, path)
+	if not ok or type(loaded) ~= 'table' then return false end
+	-- Merge per-category: keep defaults if the saved file is missing a key
+	-- (so adding new categories in a future release still works).
+	for k, v in pairs(loaded) do
+		if tab_logs[k] then
+			tab_logs[k] = v
+		end
+	end
+	return true
+end
+
 -- Init & Cleanup
 addon_clear = function()
 	playertracker = defaultplayertracker
@@ -1080,6 +1187,11 @@ addon_init = function()
 	player = windower.ffxi.get_player()
 	if not player then return end
 	playertracker = config.load('data/'.. windower.ffxi.get_player().name .. '.xml', playertracker)
+	-- Pull any persisted tab_logs snapshot from a previous session BEFORE
+	-- xichecklist_updatemenulogs() builds the visible menu items. Without
+	-- this, every reload starts from defaulttab_logs and the user has to
+	-- zone for every category to repopulate the panel.
+	load_tab_logs()
 	xichecklist_updatemenulogs()
 	if (trackermenusettings.visibility and player) then
 		ui.menu:show()
@@ -1089,8 +1201,19 @@ end
 windower.register_event('load', 'login', 'logout', addon_init)
 windower.register_event('logout', addon_clear)
 windower.register_event('unload', function()
+	-- Flush any pending tab_logs save so quitting Windower / reloading
+	-- the addon doesn't lose the most recent updates from a packet burst
+	-- that arrived inside the 5s debounce window.
+	save_tab_logs()
 	ui.menu:destroy()
 end)
+
+-- Whenever the player zones, the addon's packet handlers refresh a bunch
+-- of tab_logs categories. Schedule a persist after the burst settles so
+-- the new state survives the next /lua reload without making the user
+-- zone again.
+windower.register_event('zone change', schedule_tab_logs_save)
+windower.register_event('job change', schedule_tab_logs_save)
 
 -- =============================================================================
 -- Keyboard toggle — M key. DirectInput scancode 0x32.

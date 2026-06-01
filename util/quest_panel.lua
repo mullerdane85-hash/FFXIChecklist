@@ -263,10 +263,52 @@ function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
         return
     end
 
-    -- Position to the right of the main panel.
-    local px = anchor_x + main_panel_w + 6
+    -- Position next to the main panel, clamped to the screen.
+    --
+    -- Preferred: right of the main panel. If the panel would overflow
+    -- the right edge of the screen, fall back to the LEFT side. If even
+    -- that won't fit (tiny resolution), clamp to whichever edge has more
+    -- room. Then clamp Y so the panel doesn't slide off the bottom.
+    local res = windower.get_windower_settings()
+    local screen_w = (res and res.ui_x_res) or 1920
+    local screen_h = (res and res.ui_y_res) or 1080
+
+    -- Estimate panel height from the body text line count, so a long
+    -- walkthrough doesn't spill past the bottom border. We rebuild the
+    -- text up-front (cheap; only done when selection changes anyway)
+    -- and count newlines to size the chrome.
+    local body_text = _format(rec)
+    local n_lines = 1
+    for _ in body_text:gmatch('\n') do n_lines = n_lines + 1 end
+    local line_h = FONT_SZ + 6                            -- approx line height
+    local content_h = HEADER_H + PADDING * 2 + (n_lines * line_h)
+    local height = math.max(main_panel_h, content_h, 280)
+    -- Cap to screen height so we never exceed the display.
+    if height > screen_h - 20 then height = screen_h - 20 end
+    local gap = 6
+
+    local right_px = anchor_x + main_panel_w + gap
+    local left_px  = anchor_x - PANEL_W - gap
+    local px
+    if right_px + PANEL_W <= screen_w then
+        px = right_px                                       -- prefer right side
+    elseif left_px >= 0 then
+        px = left_px                                        -- fall back to left
+    else
+        -- Tiny screen: pin to whichever side has more room.
+        local space_right = screen_w - (anchor_x + main_panel_w + gap)
+        local space_left  = anchor_x - gap
+        if space_right >= space_left then
+            px = math.max(0, screen_w - PANEL_W)
+        else
+            px = 0
+        end
+    end
+
+    -- Clamp Y so the panel stays on-screen vertically.
     local py = anchor_y
-    local height = math.max(main_panel_h, 280)
+    if py + height > screen_h then py = math.max(0, screen_h - height) end
+    if py < 0 then py = 0 end
 
     -- Background
     ui.bg:pos(px, py); ui.bg:size(PANEL_W, height)
@@ -285,9 +327,11 @@ function quest_panel.render(rec, anchor_x, anchor_y, main_panel_w, main_panel_h)
 
     ui.body:pos(px + BORDER + 2, py + BORDER + HEADER_H + 4)
 
-    -- Rebuild body text only when selection actually changed.
+    -- Body text was already built up-front (so we could measure its
+    -- height). Push it into the texts object only when the selection
+    -- actually changes to avoid re-rendering identical text every frame.
     if rec.key ~= _last_title then
-        ui.body:text(_format(rec))
+        ui.body:text(body_text)
         _last_title = rec.key
     end
 

@@ -80,6 +80,15 @@ active_tab        = 1
 active_subtab     = 0
 scroll            = 0       -- items pane scroll
 sidebar_scroll    = 0       -- subtab sidebar scroll
+
+-- Search state. Empty string = no filter (full list shown). Set by the
+-- //xic search and //xic findall slash commands; consumed in draw()
+-- below. search_scope = 'current' searches only the active subtab's
+-- items; 'all' aggregates matches from every subtab in every tab and
+-- prefixes each hit with its source [Subtab Name] so the user can
+-- find a quest without knowing which tab it lives under.
+search_query  = ''
+search_scope  = 'current'
 selected          = 1
 subtabs_initiated = false
 subtabs_drawn     = false
@@ -704,14 +713,77 @@ draw = function()
         end
     end
     text = text .. '\\cs(150,210,255)── '..heading..' ──\\cr\n'
+    if search_query ~= '' then
+        text = text .. '\\cs(255,220,140)Search: "'..search_query..'"'
+            ..(search_scope == 'all' and ' (all tabs)' or '')
+            ..'  \\cs(170,170,170)[//xic search clear]\\cr\n'
+    end
 
-    local items = tabs[active_tab].items
+    -- ---- Item list assembly ----
+    -- Strips color escapes from item text so search matches against the
+    -- raw quest name, not the markup wrapping it.
+    local function _strip_cs(s)
+        if not s then return '' end
+        return (s:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', ''))
+    end
+    local _query_lc = search_query:lower()
+    local function _matches_search(item_text)
+        if _query_lc == '' then return true end
+        return _strip_cs(item_text):lower():find(_query_lc, 1, true) ~= nil
+    end
+
+    local items
+    if search_query ~= '' and search_scope == 'all' then
+        -- Global search: walk every subtab in every tab and collect
+        -- matches. Each match gets prefixed with [Subtab Name] so the
+        -- user can see which list it came from.
+        items = L{}
+        local seen = {}
+        for _, tab in ipairs(tabs) do
+            if tab.tabs then
+                for _, sn in ipairs(tab.tabs) do
+                    local log = tab_logs[sn]
+                    if log and log.items then
+                        for _, item in ipairs(log.items) do
+                            if item.text and _matches_search(item.text) then
+                                local key = sn..'|'..item.text
+                                if not seen[key] then
+                                    seen[key] = true
+                                    local label = defaulttab_logs[sn]
+                                                  and defaulttab_logs[sn].name
+                                                  or sn
+                                    items:append(util.list_item(
+                                        item.category,
+                                        '\\cs(150,210,255)['..label..']\\cr '
+                                            .. item.text,
+                                        item.completed,
+                                        item.obtainmethod))
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    else
+        items = tabs[active_tab].items
+        if search_query ~= '' then
+            items = items:filter(function(item)
+                return item.text and _matches_search(item.text)
+            end)
+        end
+    end
+
     if (trackermenusettings.showcompleted == false) then
         items = items:filter(function(item) return item.completed == false end)
     end
     local count = items:length()
     if count == 0 then
-        items = {util.list_item(nil, '\\cs(128,128,128)Change zones to update Quests / Campaigns / Warps / Monstrosity \\cr \n \\cs(128,128,128)Check the README or "//ffxic help" to register NPC-related data \\cr')}
+        if search_query ~= '' then
+            items = {util.list_item(nil, '\\cs(170,170,170)No matches for "'..search_query..'". \\cr\n \\cs(170,170,170)Try //xic findall '..search_query..' for a global search, or //xic search clear to reset.\\cr')}
+        else
+            items = {util.list_item(nil, '\\cs(128,128,128)Change zones to update Quests / Campaigns / Warps / Monstrosity \\cr \n \\cs(128,128,128)Check the README or "//ffxic help" to register NPC-related data \\cr')}
+        end
         count = 1
     end
     clamp_scroll(count)
@@ -722,6 +794,12 @@ draw = function()
         end
     end
     ui.menu:text(text)
+    -- Expose the post-filter items list so the quest-info side panel
+    -- (and any other prerender consumer) sees the same list the user
+    -- is actually looking at. Without this, search filtering and the
+    -- showcompleted filter would silently desync the wiki panel from
+    -- the highlighted row.
+    displayed_items = items
 end
 
 -- =============================================================================
@@ -773,9 +851,18 @@ windower.register_event('prerender', function()
            and tabs[active_tab].subtabs[active_subtab] then
             subtab_name = tabs[active_tab].subtabs[active_subtab].tab
         end
-        local items = tabs[active_tab].items
+        -- Use the post-filter list draw() exposes so search / show-
+        -- completed filtering keeps the wiki panel aligned with the
+        -- highlighted row.
+        local items = displayed_items or tabs[active_tab].items
         if items and items[selected] then
             sel_text = items[selected].text
+        end
+        -- If we're in global findall mode, the matched item text is
+        -- prefixed with "[Subtab Name] " -- strip that so the wiki
+        -- lookup matches the real quest name.
+        if sel_text and search_query ~= '' and search_scope == 'all' then
+            sel_text = sel_text:gsub('^%[[^%]]+%]%s*', '')
         end
         -- If the currently-selected row is a header / non-quest row
         -- (very common right after switching subtabs, since selected
@@ -786,6 +873,9 @@ windower.register_event('prerender', function()
            and items and not (quest_panel.lookup(sel_text)) then
             for idx = 1, #items do
                 local t = items[idx] and items[idx].text
+                if search_query ~= '' and search_scope == 'all' and t then
+                    t = t:gsub('^%[[^%]]+%]%s*', '')
+                end
                 if quest_panel.lookup(t) then
                     sel_text = t
                     break

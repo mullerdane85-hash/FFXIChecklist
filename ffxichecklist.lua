@@ -426,6 +426,8 @@ local cmds = {
 	showcompleted = S{'showcompleted'},
 	showexcluded = S{'showexcluded'},
 	showwikiinfo = S{'showwikiinfo','wiki','questinfo'},
+	search = S{'search','find','s'},
+	findall = S{'findall','searchall','globalsearch','fa'},
 	scale = S{'scale'},
 }
 
@@ -866,6 +868,9 @@ windower.register_event('addon command', function(...)
 		windower.add_to_chat(161,'//xic showcompleted to toggle show completed items on-off')
 		windower.add_to_chat(161,'//xic showexcluded to toggle show hidden RoE/Titles items on-off')
 		windower.add_to_chat(161,'//xic wiki to toggle BG-Wiki quest info panel (starter missions)')
+		windower.add_to_chat(161,'//xic search <text> to filter the current subtab (partial, case-insensitive)')
+		windower.add_to_chat(161,'//xic findall <text> to search ALL tabs at once')
+		windower.add_to_chat(161,'//xic search clear to reset the filter')
 		windower.add_to_chat(161,'//xic log <category> to log in chat')
 		windower.add_to_chat(161,'==== ==== ==== ====')
 		windower.add_to_chat(161,'Require zoning to update Quests / Warps / Monstrosity / MMM')
@@ -926,6 +931,52 @@ windower.register_event('addon command', function(...)
 		trackermenusettings:save()
 		if quest_panel and not trackermenusettings.showwikiinfo then quest_panel.hide() end
 		draw()
+	elseif cmds.search:contains(arg[1]) then
+		-- Search within the current subtab's items.
+		--   //xic search siren    -> filter to lines containing "siren"
+		--   //xic search clear    -> reset (also: empty / off / none)
+		--   //xic search          -> show current filter status
+		local q = table.concat(arg, ' ', 2)
+		q = q:gsub('^%s+',''):gsub('%s+$','')
+		if q == '' then
+			util.addon_log('search: '..(search_query == '' and '(none)' or '"'..search_query..'"'..(search_scope == 'all' and ' [all tabs]' or '')))
+		elseif q == 'clear' or q == 'off' or q == 'none' or q == 'reset' then
+			search_query = ''
+			search_scope = 'current'
+			selected = 1
+			scroll = 0
+			util.addon_log('search cleared')
+			draw()
+		else
+			search_query = q
+			search_scope = 'current'
+			selected = 1
+			scroll = 0
+			util.addon_log('search: "'..q..'" (current subtab)')
+			draw()
+		end
+	elseif cmds.findall:contains(arg[1]) then
+		-- Global search across every subtab in every tab. Matches are
+		-- prefixed with [Subtab Name] so the user can find quests
+		-- without knowing which tab they live under.
+		--   //xic findall siren   -> search all 25 quest/mission subtabs
+		local q = table.concat(arg, ' ', 2)
+		q = q:gsub('^%s+',''):gsub('%s+$','')
+		if q == '' or q == 'clear' or q == 'off' or q == 'none' then
+			search_query = ''
+			search_scope = 'current'
+			selected = 1
+			scroll = 0
+			util.addon_log('findall cleared')
+			draw()
+		else
+			search_query = q
+			search_scope = 'all'
+			selected = 1
+			scroll = 0
+			util.addon_log('findall: "'..q..'" (all tabs)')
+			draw()
+		end
 	elseif cmds.copy:contains(arg[1]) then
 		windower.copy_to_clipboard(util.table_to_clipboard(tabs[active_tab].items))
 		windower.add_to_chat(100, 'Copy to clipboard')

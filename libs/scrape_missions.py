@@ -1,84 +1,147 @@
 #!/usr/bin/env python3
-# Scrape BG-Wiki mission pages for Bastok, Windurst, San d'Oria starter missions.
-# Output: quest_info.lua data file.
-import re, sys, os, json, html as htmllib, urllib.parse, urllib.request, time
+# Scrape BG-Wiki for ALL mission categories. Maps to FFXIChecklist subtab names.
+import re, sys, os, html as htmllib, urllib.request, time, json
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-NATIONS = [
-    ('Bastok',   'Bastok_Mission',  range(1,10), [1,2,3]),  # 1-1..1-3, 2-1..2-3, 3-1..3-3 etc — handled below
-    ('Windurst', 'Windurst_Mission', None, None),
-    ('SanDoria', 'San_d%27Oria_Mission', None, None),
+# (BG-Wiki category slug, FFXIChecklist subtab name, friendly nation key)
+CATEGORIES = [
+    ('Category:Bastok_Missions',                       'bastokmissions',   'Bastok'),
+    ('Category:Windurst_Missions',                     'windurstmissions', 'Windurst'),
+    ('Category:San_d%27Oria_Missions',                 'sandoriamissions', 'SanDoria'),
+    ('Category:Zilart_Missions',                       'zilartmissions',   'Zilart'),
+    ('Category:Promathia_Missions',                    'copmissions',      'CoP'),
+    ('Category:Aht_Urhgan_Missions',                   'ahturhganmissions','AhtUrhgan'),
+    ('Category:Wings_of_the_Goddess_Missions',         'wotgmissions',     'WotG'),
+    ('Category:Crystalline_Missions',                  'acpmissions',      'ACP'),
+    ('Category:A_Moogle_Kupo_d%27Etat_Missions',       'mkdmissions',      'MKD'),
+    ('Category:A_Shantotto_Ascension_Missions',        'asamissions',      'ASA'),
+    ('Category:Seekers_of_Adoulin_Missions',           'soamissions',      'SoA'),
+    ('Category:Rhapsodies_of_Vanadiel_Missions',       'rovmissions',      'RoV'),
+    ('Category:The_Voracious_Resurgence_Missions',     'tvrmissions',      'TVR'),
+    ('Category:Assault',                               'assaults',         'Assault'),
 ]
 
 UA = {'User-Agent': 'Mozilla/5.0 (FFXIChecklist QuestScraper)'}
 
-def fetch(slug):
+def fetch(slug, force=False):
+    fname = re.sub(r'[^A-Za-z0-9._-]', '_', slug) + '.html'
+    if not force and os.path.exists(fname) and os.path.getsize(fname) > 4000:
+        with open(fname, 'r', encoding='utf-8') as f: return f.read()
     url = f'https://www.bg-wiki.com/ffxi/{slug}'
-    fname = re.sub(r'[^A-Za-z0-9._-]','_', slug) + '.html'
-    if os.path.exists(fname) and os.path.getsize(fname) > 4000:
-        with open(fname,'r',encoding='utf-8') as f: return f.read()
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=30) as r:
         data = r.read().decode('utf-8','replace')
-    with open(fname,'w',encoding='utf-8') as f: f.write(data)
-    time.sleep(0.3)
+    with open(fname, 'w', encoding='utf-8') as f: f.write(data)
+    time.sleep(0.25)
     return data
 
+def fetch_category_pages(cat_slug):
+    """Walk all paginated pages of a category. Returns list of (slug, title)."""
+    out = []
+    next_slug = cat_slug
+    seen_titles = set()
+    page_count = 0
+    while next_slug and page_count < 40:
+        page_count += 1
+        html = fetch(next_slug)
+        # Extract from mw-pages section
+        m = re.search(r'<div id="mw-pages">(.*?)<div class="printfooter"', html, re.DOTALL)
+        section = m.group(1) if m else html
+        # Find page links
+        links = re.findall(r'<a href="/ffxi/([^"#]+)" title="([^"]+)">', section)
+        for slug, title in links:
+            if 'Category:' in slug: continue
+            if 'Special:' in slug: continue
+            title = htmllib.unescape(title)
+            if title in seen_titles: continue
+            seen_titles.add(title)
+            out.append((slug, title))
+        # Find 'next page' link
+        nxt = re.search(r'<a href="[^"]*\?title=([^&"]+)&amp;pagefrom=([^"&]+)[^"]*"[^>]*>next page</a>', html)
+        if nxt:
+            # Reconstruct slug with pagefrom param
+            next_slug = f'{nxt.group(1)}&pagefrom={nxt.group(2)}'
+        else:
+            break
+    return out
+
 def strip_tags(s):
-    # Replace <a ...>X</a> with X, <i>X</i> with X, etc — but FIRST inline <img alt="X">
     s = re.sub(r'<img[^>]*alt="([^"]*)"[^>]*/?>', r'\1', s)
-    # Replace <br/> with newline
     s = re.sub(r'<br\s*/?>', '\n', s)
-    # Remove all other tags
     s = re.sub(r'<[^>]+>', '', s)
     s = htmllib.unescape(s).strip()
-    # Collapse internal whitespace newlines
     s = re.sub(r'[ \t]+', ' ', s)
     s = re.sub(r'\n[ \t]+', '\n', s)
     s = re.sub(r'\n+', ' ', s)
     return s.strip()
 
+_INFO_KEYS = {
+    'series','starting npc','title','repeatable','description',
+    'previous mission','next mission','reward','level cap','members',
+    'assault rank','objective','mission orders','time limit',
+    'recommended lv.','recommended lv','assault points',
+    'tag','tag npc','issuing officer','required rank','required mission',
+    'previous assault','next assault',
+}
+
 def parse_info_table(html):
-    # Find the Mission_Header template's table. Class is typically "bdrwhite missions"
-    # but we just scan all tables and pick the one containing Series + Starting NPC.
+    """Parse mission/assault info-box, handling both row schemas:
+       <th>label</th><td>value</td>     (standard mission template)
+       <td><b>label:</b></td><td>value</td> (assault / older quest templates)
+    Returns a dict; empty if nothing matched."""
     tables = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL)
     info = {}
+    best_score = -1
     for t in tables:
-        if 'Series' in t and ('Starting NPC' in t or 'Starting_NPC' in t):
-            # Title is in header row with colspan="100%"
-            mtitle = re.search(r'<th[^>]*colspan="?100%"?[^>]*>(.*?)</th>', t, re.DOTALL)
-            if mtitle:
-                info['_title'] = strip_tags(mtitle.group(1))
-            # Walk rows
-            rows = re.findall(r'<tr[^>]*>(.*?)</tr>', t, re.DOTALL)
-            for row in rows:
-                m = re.search(r'<th[^>]*>(.*?)</th>\s*<td[^>]*>(.*?)</td>', row, re.DOTALL)
-                if not m: continue
-                k = strip_tags(m.group(1))
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', t, re.DOTALL)
+        local = {}
+        # Title in top colspan row
+        mtitle = re.search(r'<th[^>]*colspan="?100%"?[^>]*>(.*?)</th>', t, re.DOTALL)
+        if not mtitle:
+            mtitle = re.search(r'<td[^>]*colspan="?\d+"?[^>]*>\s*<b[^>]*>(.*?)</b>', t, re.DOTALL)
+        if mtitle:
+            local['_title'] = strip_tags(mtitle.group(1))
+        for row in rows:
+            # Standard schema: <th>label</th><td>value</td>
+            m = re.search(r'<th[^>]*>(.*?)</th>\s*<td[^>]*>(.*?)</td>', row, re.DOTALL)
+            if m:
+                k = strip_tags(m.group(1)); v = strip_tags(m.group(2))
+                if k: local[k] = v
+                continue
+            # Assault schema: <td>...<b>label:</b></td><td>value</td>...
+            m = re.search(r'<td[^>]*>\s*(?:&#160;)?\s*<b[^>]*>(.*?)</b>\s*</td>\s*(?:<td[^>]*colspan="?\d+"?[^>]*>|<td[^>]*>)(.*?)</td>', row, re.DOTALL)
+            if m:
+                k = strip_tags(m.group(1)).rstrip(':')
                 v = strip_tags(m.group(2))
-                if k: info[k] = v
-            break
-    return info
+                if k: local[k] = v
+                # An assault row can carry a SECOND label/value pair in the
+                # remaining tds (e.g. Time Limit + Recommended Lv).
+                tail = row[m.end():]
+                m2 = re.search(r'<td[^>]*>\s*(?:&#160;)?\s*<b[^>]*>(.*?)</b>\s*</td>\s*<td[^>]*>(.*?)</td>', tail, re.DOTALL)
+                if m2:
+                    k2 = strip_tags(m2.group(1)).rstrip(':')
+                    v2 = strip_tags(m2.group(2))
+                    if k2: local[k2] = v2
+        # Score the table by how many recognized keys it contains
+        score = sum(1 for k in local if k.lower() in _INFO_KEYS)
+        if local.get('_title'): score += 1
+        if score > best_score:
+            best_score = score
+            info = local
+    return info if best_score >= 1 else {}
 
 def parse_walkthrough(html):
-    # Find <h2>...id="Walkthrough"...</h2> and consume until next <h2> or end of parser-output.
     m = re.search(r'<h2><span[^>]*id="Walkthrough"[^>]*>.*?</span>\s*</h2>(.*?)(?=<h2>|<!--|</div></div><div class="printfooter")', html, re.DOTALL)
     if not m: return []
     chunk = m.group(1)
-    # Strip <figure>...</figure> wrappers (images don't render anyway)
     chunk = re.sub(r'<figure[^>]*>.*?</figure>', '', chunk, flags=re.DOTALL)
-    # Find the outer <ul>
     return parse_ul(chunk)
 
 def parse_ul(chunk):
-    """Return a list of [text, sublist] from the first top-level <ul> in chunk."""
-    # Find first <ul> (not nested inside another)
     start = chunk.find('<ul>')
     if start < 0: return []
-    # Find its matching </ul>
-    depth = 0
-    i = start
+    depth = 0; i = start
     while i < len(chunk):
         if chunk[i:i+4] == '<ul>':
             depth += 1; i += 4
@@ -91,14 +154,11 @@ def parse_ul(chunk):
     return parse_li_list(body)
 
 def parse_li_list(body):
-    """Parse <li>...</li> entries, splitting nested <ul>...</ul> as sublist."""
     out = []
     i = 0
     while i < len(body):
         if body[i:i+4] != '<li>':
-            # skip stray whitespace
             i += 1; continue
-        # Find matching </li>
         depth = 1; j = i + 4
         while j < len(body) and depth > 0:
             if body[j:j+4] == '<li>':
@@ -108,28 +168,23 @@ def parse_li_list(body):
             else:
                 j += 1
         item = body[i+4 : j-5]
-        # Split off any inner <ul>...</ul>
         sub = []
-        mul = re.search(r'<ul>(.*)</ul>\s*$', item, re.DOTALL)
-        if mul:
-            # Find balanced sub-ul start
-            sstart = item.find('<ul>')
-            if sstart >= 0:
-                # find matching close
-                depth2 = 0; k = sstart
-                while k < len(item):
-                    if item[k:k+4] == '<ul>':
-                        depth2 += 1; k += 4
-                    elif item[k:k+5] == '</ul>':
-                        depth2 -= 1; k += 5
-                        if depth2 == 0: break
-                    else:
-                        k += 1
-                pre = item[:sstart]
-                sub_body = item[sstart+4 : k-5]
-                post = item[k:]
-                sub = parse_li_list(sub_body)
-                item = pre + post
+        sstart = item.find('<ul>')
+        if sstart >= 0:
+            depth2 = 0; k = sstart
+            while k < len(item):
+                if item[k:k+4] == '<ul>':
+                    depth2 += 1; k += 4
+                elif item[k:k+5] == '</ul>':
+                    depth2 -= 1; k += 5
+                    if depth2 == 0: break
+                else:
+                    k += 1
+            pre = item[:sstart]
+            sub_body = item[sstart+4 : k-5]
+            post = item[k:]
+            sub = parse_li_list(sub_body)
+            item = pre + post
         text = strip_tags(item)
         if text or sub:
             out.append((text, sub))
@@ -140,18 +195,35 @@ def scrape_mission(slug, display_title):
     html = fetch(slug)
     info = parse_info_table(html)
     walk = parse_walkthrough(html)
-    return {
+    # Pull description from any of several possible label variants.
+    desc = (info.get('Description') or info.get('Objective')
+            or info.get('Mission Orders') or '')
+    npc  = (info.get('Starting NPC') or info.get('Tag NPC')
+            or info.get('Tag') or info.get('Issuing Officer') or '')
+    rec = {
         'page'         : display_title,
         'title'        : info.get('_title') or info.get('Title') or display_title,
         'series'       : info.get('Series',''),
-        'starting_npc' : info.get('Starting NPC',''),
+        'starting_npc' : npc,
         'subtitle'     : info.get('Title',''),
         'repeatable'   : info.get('Repeatable',''),
-        'description'  : info.get('Description',''),
+        'description'  : desc,
         'walkthrough'  : walk,
-        'previous'     : info.get('Previous Mission',''),
-        'next'         : info.get('Next Mission',''),
+        'previous'     : info.get('Previous Mission','') or info.get('Previous Assault',''),
+        'next'         : info.get('Next Mission','')     or info.get('Next Assault',''),
+        # Assault-specific (empty for regular missions)
+        'assault_rank' : info.get('Assault Rank',''),
+        'time_limit'   : info.get('Time Limit',''),
+        'mission_orders': info.get('Mission Orders',''),
+        'recommended_lv': info.get('Recommended Lv.','') or info.get('Recommended Lv',''),
     }
+    # Filter: skip pages with no useful info at all (NPC/gear/category-list
+    # noise pulled in from the category pages).
+    if not (rec['title'] and (rec['description'] or rec['starting_npc']
+                              or rec['walkthrough'] or rec['series']
+                              or rec['assault_rank'])):
+        return None
+    return rec
 
 def lua_str(s):
     if s is None: return "''"
@@ -171,16 +243,16 @@ def emit_walkthrough(items, indent):
             lines.append(f"{pad}{{ {lua_str(txt)} }},")
     return lines
 
-def emit_lua(missions_by_nation, outpath):
+def emit_lua(missions_by_subtab, outpath):
     L = []
     L.append('-- Auto-generated by FFXIChecklist quest scraper.')
     L.append('-- Source: BG-Wiki (https://www.bg-wiki.com/ffxi/Category:Missions)')
-    L.append('-- Do not edit by hand - re-run scrape_missions.py to regenerate.')
+    L.append('-- Do not edit by hand - re-run scrape_all_missions.py to regenerate.')
     L.append('')
     L.append('local quest_info = {}')
     L.append('')
-    for nation, missions in missions_by_nation.items():
-        L.append(f"quest_info['{nation}'] = {{")
+    for subtab, missions in missions_by_subtab.items():
+        L.append(f"quest_info['{subtab}'] = {{")
         for m in missions:
             key = m['page']
             L.append(f"    [{lua_str(key)}] = {{")
@@ -192,6 +264,15 @@ def emit_lua(missions_by_nation, outpath):
             L.append(f"        series       = {lua_str(m['series'])},")
             L.append(f"        previous     = {lua_str(m['previous'])},")
             L.append(f"        next         = {lua_str(m['next'])},")
+            # Assault-specific fields (empty string for non-assault missions)
+            if m.get('assault_rank'):
+                L.append(f"        assault_rank = {lua_str(m['assault_rank'])},")
+            if m.get('time_limit'):
+                L.append(f"        time_limit   = {lua_str(m['time_limit'])},")
+            if m.get('mission_orders'):
+                L.append(f"        mission_orders = {lua_str(m['mission_orders'])},")
+            if m.get('recommended_lv'):
+                L.append(f"        recommended_lv = {lua_str(m['recommended_lv'])},")
             if m['walkthrough']:
                 L.append('        walkthrough  = {')
                 L.extend(emit_walkthrough(m['walkthrough'], 12))
@@ -203,50 +284,42 @@ def emit_lua(missions_by_nation, outpath):
         L.append('')
     L.append('return quest_info')
     L.append('')
-    with open(outpath,'w',encoding='utf-8') as f:
+    with open(outpath, 'w', encoding='utf-8') as f:
         f.write('\n'.join(L))
 
-# --- Enumerate slugs from cached category html ---
-def enumerate_slugs():
-    with open('all_slugs.json','r') as f: slugs = json.load(f)
-    out = {}
-    for nation, arr in slugs.items():
-        miss = []
-        for slug, title in arr:
-            if 'Special:' in slug: continue
-            if 'Category:' in slug: continue
-            # Decode html entities in title
-            title = htmllib.unescape(title)
-            miss.append((slug, title))
-        # Sort by trailing N-M
-        def sk(t):
-            m = re.search(r'(\d+)-(\d+)', t[1])
-            if m: return (int(m.group(1)), int(m.group(2)))
-            return (99,99)
-        miss.sort(key=sk)
-        out[nation] = miss
-    return out
-
 def main():
-    slugs = enumerate_slugs()
     result = {}
-    for nation, arr in slugs.items():
-        result[nation] = []
-        for slug, title in arr:
-            print(f'  {nation}: {title} ({slug})')
+    for cat_slug, subtab, nation in CATEGORIES:
+        print(f'=== {subtab} ({cat_slug}) ===', flush=True)
+        try:
+            pages = fetch_category_pages(cat_slug)
+        except Exception as e:
+            print(f'  ERROR fetching category {cat_slug}: {e}')
+            continue
+        print(f'  {len(pages)} pages')
+        missions = []
+        skipped = 0
+        for i, (slug, title) in enumerate(pages):
             try:
                 m = scrape_mission(slug, title)
-                result[nation].append(m)
+                if m is None:
+                    skipped += 1
+                    continue
+                missions.append(m)
+                if (i+1) % 25 == 0:
+                    print(f'    [{i+1}/{len(pages)}] {title}', flush=True)
             except Exception as e:
-                print('    ERROR:', e)
+                print(f'    ERROR {slug}: {e}')
+        if skipped:
+            print(f'  (skipped {skipped} non-mission pages)')
+        result[subtab] = missions
+        print(f'  -> {len(missions)} parsed', flush=True)
+
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'quest_info.lua')
     emit_lua(result, out)
     print('Wrote', out)
-    # Quick summary
-    for nation, arr in result.items():
-        print(f'  {nation}: {len(arr)} missions')
-        for m in arr[:2]:
-            print(f"    {m['page']}: npc={m['starting_npc'][:40]!r} walk={len(m['walkthrough'])} steps")
+    for subtab, arr in result.items():
+        print(f'  {subtab}: {len(arr)}')
 
 if __name__ == '__main__':
     main()

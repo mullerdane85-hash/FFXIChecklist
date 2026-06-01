@@ -28,7 +28,26 @@ images = images or require('images')
 -- Data
 -- ---------------------------------------------------------------------------
 local quest_info
-local title_index = {}  -- title -> { nation = ..., key = ..., data = ... }
+local title_index   = {}   -- clean title/key -> { subtab, key, data }
+local subtab_known  = {}   -- subtab name -> true if we have data for it
+
+local function _norm(s)
+    if not s then return '' end
+    s = s:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', '')
+    -- Strip leading list-marker noise: dashes, bullets, '>' marker,
+    -- AND the leading underscores that FFXIChecklist's story.lua uses to
+    -- indent mission entries (e.g. '__Resonance' -> 'Resonance').
+    -- Also drop leading apostrophes used for chapter headers
+    -- (e.g. "'Chapter One: Creation and Rebirth'").
+    s = s:gsub("^['\"_]+", '')
+    s = s:gsub('^[%-%*%>%s]+', ''):gsub('%s+$','')
+    s = s:gsub("['\"]+$", '')
+    -- Lowercase + collapse spaces so curly-quote / apostrophe noise
+    -- between FFXIChecklist's stored mission names and BG-Wiki's titles
+    -- can't keep matches from landing.
+    s = s:lower():gsub("['`']", "'"):gsub('%s+', ' ')
+    return s
+end
 
 local function _load()
     local ok, data = pcall(dofile, windower.addon_path .. 'libs/quest_info.lua')
@@ -37,24 +56,27 @@ local function _load()
         return
     end
     quest_info = data
-    -- Build reverse lookup by title.
-    for nation, missions in pairs(quest_info) do
+    -- Build reverse lookup. The data file is keyed by FFXIChecklist subtab
+    -- name (e.g. 'bastokmissions', 'soamissions') and inside each, by the
+    -- BG-Wiki page name (e.g. 'Bastok Mission 1-1', 'A Mythril Bullet for
+    -- the General'). We index by:
+    --   * the BG-Wiki page-name key   ("Bastok Mission 1-1")
+    --   * the mission TITLE           ("The Zeruhn Report")
+    --   * normalized variants of both ("the zeruhn report")
+    -- so a click from FFXIChecklist's list (which shows the title) lands.
+    for subtab, missions in pairs(quest_info) do
+        subtab_known[subtab] = true
         for key, m in pairs(missions) do
+            local rec = { subtab = subtab, key = key, data = m }
+            title_index[key]         = rec
+            title_index[_norm(key)]  = rec
             if m.title and m.title ~= '' then
-                title_index[m.title] = { nation = nation, key = key, data = m }
+                title_index[m.title]         = rec
+                title_index[_norm(m.title)]  = rec
             end
-            -- Also index by the page-name itself so "Bastok Mission 1-1" works.
-            title_index[key] = { nation = nation, key = key, data = m }
         end
     end
 end
-
--- Starter-city mission subtabs that should auto-open the wiki panel.
-local STARTER_SUBTABS = {
-    sandoriamissions = true,
-    bastokmissions   = true,
-    windurstmissions = true,
-}
 
 -- ---------------------------------------------------------------------------
 -- Theme (matches FFXIChecklist's existing palette)
@@ -212,7 +234,7 @@ local function _format(rec)
     end
     lines[#lines+1] = ''
 
-    -- Top-of-card fields (user-specified order)
+    -- Top-of-card fields (user-specified order: Starting NPC first).
     _emit_field(lines, 'Starting NPC', d.starting_npc)
     if d.subtitle and d.subtitle ~= '' and d.subtitle ~= 'None' then
         _emit_field(lines, 'Title', d.subtitle)
@@ -220,6 +242,12 @@ local function _format(rec)
         _emit_field(lines, 'Title', d.subtitle == '' and nil or d.subtitle)
     end
     _emit_field(lines, 'Repeatable', d.repeatable)
+    -- Assault-specific fields (present only on Category:Assault pages,
+    -- absent on regular mission pages so they just skip).
+    _emit_field(lines, 'Assault Rank',   d.assault_rank)
+    _emit_field(lines, 'Time Limit',     d.time_limit)
+    _emit_field(lines, 'Recommended Lv', d.recommended_lv)
+    _emit_field(lines, 'Mission Orders', d.mission_orders)
     lines[#lines+1] = ''
     _emit_field(lines, 'Description', d.description)
     lines[#lines+1] = ''
@@ -246,9 +274,10 @@ function quest_panel.lookup(title)
     if not title or title == '' then return nil end
     -- Strip color escapes that may surround the item text.
     local clean = title:gsub('\\cs%([%d,]+%)', ''):gsub('\\cr', ''):gsub('^%s+',''):gsub('%s+$','')
-    -- Strip a leading "- " or "* " that the items pane may have added.
+    -- Strip a leading "- " or "* " or "> " that the items pane may have added.
     clean = clean:gsub('^[%-%*%>%s]+', '')
-    return title_index[clean]
+    -- Try exact match first, then normalized fallback.
+    return title_index[clean] or title_index[_norm(clean)]
 end
 
 -- ---------------------------------------------------------------------------
@@ -358,7 +387,7 @@ function quest_panel.tick(opts)
     if not opts or not opts.visible or not opts.show_wiki then
         _hide(); return
     end
-    if not opts.subtab_name or not STARTER_SUBTABS[opts.subtab_name] then
+    if not opts.subtab_name or not subtab_known[opts.subtab_name] then
         _hide(); return
     end
     local rec = quest_panel.lookup(opts.selected_text)
@@ -374,11 +403,18 @@ end
 _load()
 
 function quest_panel.is_starter(subtab_name)
-    return STARTER_SUBTABS[subtab_name] == true
+    -- Retained for back-compat. Returns true if we have wiki data for
+    -- this subtab regardless of whether it's a "starter city" mission.
+    return subtab_known[subtab_name] == true
+end
+
+function quest_panel.has_data(subtab_name)
+    return subtab_known[subtab_name] == true
 end
 
 function quest_panel.reload()
-    title_index = {}
+    title_index  = {}
+    subtab_known = {}
     _load()
     _last_title = nil
 end

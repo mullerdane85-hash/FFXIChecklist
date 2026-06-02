@@ -701,6 +701,39 @@ windower.register_event('incoming chunk', function(id, data, modified, injected,
 	throttled_update()
 end)
 
+-- Rebuild tabs[active_tab].items from tab_logs[<subtab>].items WITHOUT
+-- touching active_subtab / selected / scroll. The subtab on_click()
+-- handler does the same rebuild but also resets the user's view to
+-- the top of the list -- fine for a deliberate click, NOT fine when we
+-- want to silently pick up fresh data after a zone-triggered packet.
+--
+-- Why this matters: the displayed items pane reads tabs[active_tab].items.
+-- That list was cloned at subtab-click time from tab_logs[subtab].items.
+-- Packet handlers (log_quests / log_missions / log_titles / ...) update
+-- tab_logs but never tabs[active_tab].items, so the visible list went
+-- stale until the next subtab click or addon reload. The user reported
+-- "no update is working besides reloading the addon" -- this is the fix.
+refresh_active_subtab = function()
+	if not (tabs and tabs[active_tab]) then return end
+	if not tabs[active_tab].subtabs then return end
+	if not (active_subtab and active_subtab > 0) then return end
+	local s = tabs[active_tab].subtabs[active_subtab]
+	if not s or not s.tab then return end
+	local tab = s.tab
+	local activetab = active_tab
+	if not tab_logs[tab] then return end
+	tabs[activetab].items = L{}
+	append_header(activetab, tab_logs[tab].name..' (%d/%d)',
+	              tab_logs[tab].completed, tab_logs[tab].total)
+	if addonhelptext[tab] then
+		for j, _ in pairs(addonhelptext[tab]) do
+			append_addonhelp(activetab, addonhelptext[tab][j][1],
+			                 playertracker.talk_to_npc[addonhelptext[tab][j][2]])
+		end
+	end
+	append_items(tabs[activetab].items, tab_logs[tab].items)
+end
+
 THROTTLED = false
 throttled_update = function()
 	if THROTTLED then return end
@@ -710,6 +743,7 @@ throttled_update = function()
 	pcall(function ()
 		update_maintab()
 		xichecklist_updatetabs()
+		refresh_active_subtab()
 		if trackermenusettings.visibility then draw() end
 	end)
 	THROTTLED = false

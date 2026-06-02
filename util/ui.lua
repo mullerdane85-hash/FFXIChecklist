@@ -195,6 +195,37 @@ ui.close_text:register_event('left_click', function()
     trackermenusettings:save()
 end)
 
+-- Header toggle: flip showcompleted with a click. Sits left of the X
+-- in the header bar. Saves the new state and triggers a redraw via
+-- xichecklist_updatemenulogs() so the items pane refreshes immediately
+-- (some tabs build their items list lazily on rebuild, not just on
+-- the next prerender). Useful for content like assaults / repeatable
+-- quests where the user wants to see what's already done.
+ui.toggle_text = texts.new('', {
+    pos = {x = 0, y = 0},
+    text = { font = 'Arial', size = SUBTAB_FONT_SIZE(), red = 200, green = 230, blue = 255,
+             stroke = {width = 1, alpha = 200, red = 0, green = 0, blue = 0} },
+    bg = { alpha = 0 },
+    padding = 0,
+    flags = { draggable = false, bold = true },
+})
+ui.toggle_text:register_event('left_click', function()
+    trackermenusettings.showcompleted = not trackermenusettings.showcompleted
+    trackermenusettings:save()
+    util.addon_log('showcompleted: '..tostring(trackermenusettings.showcompleted))
+    if xichecklist_updatemenulogs then xichecklist_updatemenulogs() end
+    -- Force the active tab to rebuild its items list against the new
+    -- filter setting so the user sees the toggle take effect without
+    -- clicking the subtab again.
+    if tabs[active_tab] and tabs[active_tab].subtabs
+       and active_subtab and active_subtab > 0
+       and tabs[active_tab].subtabs[active_subtab]
+       and tabs[active_tab].subtabs[active_subtab].on_click then
+        tabs[active_tab].subtabs[active_subtab].on_click()
+    end
+    draw()
+end)
+
 -- Sidebar scroll arrows (texts so they can take clicks)
 ui.sidebar_up = texts.new('', {
     pos = {x = 0, y = 0},
@@ -250,7 +281,7 @@ ui_show_all = function()
     ui.border_left:show(); ui.border_rite:show()
     ui.divider:show()
     ui.tabstrip_line:show()
-    ui.title_text:show(); ui.close_text:show()
+    ui.title_text:show(); ui.close_text:show(); ui.toggle_text:show()
     ui.menu:show()
     for _, tab in ipairs(tabs) do
         if tab.button and tab.button.show then tab.button:show() end
@@ -276,7 +307,7 @@ ui_hide_all = function()
     ui.border_left:hide(); ui.border_rite:hide()
     ui.divider:hide()
     ui.tabstrip_line:hide()
-    ui.title_text:hide(); ui.close_text:hide()
+    ui.title_text:hide(); ui.close_text:hide(); ui.toggle_text:hide()
     ui.menu:hide()
     ui.sidebar_up:hide(); ui.sidebar_dn:hide()
     -- EVERY main tab + EVERY subtab (bg + label) -- no floating leftovers
@@ -686,6 +717,24 @@ draw = function()
     ui.title_text:pos(px + BORDER + PADDING(), py + BORDER + math.floor((HEADER_H - TITLE_FONT_SIZE()) / 2))
     ui.close_text:pos(px + PANEL_W - BORDER - PADDING() - 8, py + BORDER + math.floor((HEADER_H - TITLE_FONT_SIZE()) / 2))
 
+    -- Show-completed toggle button. Label flips so the user always sees
+    -- the action the click WILL perform: "[Show Done]" when items are
+    -- currently hidden, "[Hide Done]" when they're currently shown.
+    -- Positioned just left of the X with enough margin to fit
+    -- "[Hide Done]" (the longer label).
+    local toggle_label = trackermenusettings.showcompleted
+        and '\\cs(180,255,180)[Hide Done]\\cr'
+        or  '\\cs(255,220,140)[Show Done]\\cr'
+    ui.toggle_text:text(toggle_label)
+    local tw = ui.toggle_text:extents() or 90
+    local toggle_x = px + PANEL_W - BORDER - PADDING() - 8 - tw - 10
+    ui.toggle_text:pos(toggle_x,
+                       py + BORDER + math.floor((HEADER_H - SUBTAB_FONT_SIZE()) / 2))
+    -- Expose the toggle's left edge so the title-bar drag handler in
+    -- the global mouse callback knows to stop just before it (otherwise
+    -- clicking [Show Done] would also start a window drag).
+    header_drag_x_max = toggle_x - 4
+
     -- Horizontal line below the main tab strip
     local tabstrip_bottom_y = py + BORDER + HEADER_H + maintab_strip_h
     ui.tabstrip_line:pos(px + BORDER, tabstrip_bottom_y)
@@ -964,10 +1013,14 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
     -- Title-bar hit area = full header strip minus the close-X right edge
     local title_y_top = py + BORDER
     local title_y_bot = py + BORDER + HEADER_H
+    -- header_drag_x_max is set in draw() to the left edge of the toggle
+    -- button (which sits just left of the close X). Falling back to a
+    -- close-X-only bound if draw() hasn't run yet.
     local close_x_left = px + PANEL_W - BORDER - PADDING() - 18
+    local drag_x_max = header_drag_x_max or close_x_left
     if type == 1
        and y >= title_y_top and y <= title_y_bot
-       and x < close_x_left then
+       and x < drag_x_max then
         drag.active = true
         drag.off_x  = x - px
         drag.off_y  = y - py

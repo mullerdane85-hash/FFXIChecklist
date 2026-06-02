@@ -899,9 +899,23 @@ local function _player_in_game()
     return info and info.logged_in == true
 end
 
+-- Text-input guard. Returns true if the player has the chat input or the
+-- macro editor open. windower.ffxi.get_info().chat_open is true while
+-- either text-entry surface is active (FFXI treats both as the same
+-- input mode at the client level), so a single check covers both. We
+-- temporarily hide the whole panel so it can't ghost over the in-game
+-- macro editor / chat window. trackermenusettings.visibility is left
+-- untouched so the panel comes back automatically when the text input
+-- closes.
+local function _text_input_open()
+    local info = windower.ffxi.get_info()
+    return info and info.chat_open == true
+end
+
 windower.register_event('prerender', function()
     local is_visible = (trackermenusettings.visibility == true)
                       and _player_in_game()
+                      and not _text_input_open()
     if is_visible and not _was_visible then
         ui_show_all()
         _was_visible = true

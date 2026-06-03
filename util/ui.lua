@@ -899,17 +899,35 @@ local function _player_in_game()
     return info and info.logged_in == true
 end
 
--- Text-input guard. Returns true if the player has the chat input or the
--- macro editor open. windower.ffxi.get_info().chat_open is true while
--- either text-entry surface is active (FFXI treats both as the same
--- input mode at the client level), so a single check covers both. We
--- temporarily hide the whole panel so it can't ghost over the in-game
--- macro editor / chat window. trackermenusettings.visibility is left
--- untouched so the panel comes back automatically when the text input
--- closes.
+-- Text-input guard. Returns true if the player is typing into anything
+-- FFXI intercepts: chat bar, macro editor, search comment, etc.
+--
+-- Detection uses TWO signals, OR'd together:
+--
+--   1. windower.ffxi.get_info().chat_open -- true while the chat input
+--      bar is active. Covers /tells, /say, /linkshell, etc.
+--
+--   2. _last_blocked_at  -- timestamp of the last keyboard event that
+--      arrived with blocked = true. When FFXI intercepts a keystroke
+--      for text entry it flags the event as blocked, even when
+--      chat_open stays false (the macro editor specifically does this).
+--      Treating any recent blocked event as "input active" catches the
+--      macro editor without needing a separate field FFXI may or may
+--      not expose. 1.5 s window so a brief pause between keys doesn't
+--      flicker the panel back on mid-edit.
+--
+-- trackermenusettings.visibility is left untouched so the panel comes
+-- back automatically once the input closes (or the timestamp expires
+-- for the keyboard-blocked path).
+local _last_blocked_at = 0
+windower.register_event('keyboard', function(dik, pressed, flags, blocked)
+    if blocked then _last_blocked_at = os.clock() end
+end)
 local function _text_input_open()
     local info = windower.ffxi.get_info()
-    return info and info.chat_open == true
+    if info and info.chat_open == true then return true end
+    if (os.clock() - _last_blocked_at) < 1.5 then return true end
+    return false
 end
 
 windower.register_event('prerender', function()

@@ -877,7 +877,11 @@ draw = function()
     for i = 1, VISIBLE_ROWS do
         local idx = i + scroll
         if items[idx] then
-            text = text .. (idx == selected and '\\cs(255,0,0)> ' or '  ') .. format_item(items[idx]) .. '\\cr\n'
+            -- Windower's \cs color codes don't nest, so we close the cursor's
+            -- red color with \cr BEFORE format_item starts — otherwise an
+            -- item's own color (orange for in-progress, etc.) gets swallowed
+            -- and everything renders red.
+            text = text .. (idx == selected and '\\cs(255,0,0)>\\cr ' or '  ') .. format_item(items[idx]) .. '\n'
         end
     end
     ui.menu:text(text)

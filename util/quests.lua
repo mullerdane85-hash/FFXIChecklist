@@ -92,11 +92,16 @@ quest_util.log_missions = function(mission_type, current_mission_id)
 	for key in keys:it() do
 		total = total+1
 		local completion = false
+		local is_current  = false
 		if (current_mission_id > maps[mission_type][key].id) then
 			completion = true
 			complete = complete+1
+		elseif (current_mission_id == maps[mission_type][key].id) then
+			-- The mission the player is actively on. Renders in orange so it's
+			-- distinguishable from both completed (green) and not-yet-started.
+			is_current = true
 		end
-		table.insert(output_list, util.list_item(nil, maps[mission_type][key].name, completion))
+		table.insert(output_list, util.list_item(nil, maps[mission_type][key].name, completion, nil, is_current))
 	end
 	playertracker[mission_type..'_completed'] = complete
 	playertracker[mission_type..'_total'] = total

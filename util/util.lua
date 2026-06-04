@@ -51,14 +51,16 @@ util.cleanspaces = function(str)
     return str:gsub(" ", "_")
 end
 
-util.list_item = function(category, text, completed, obtainmethod)
+util.list_item = function(category, text, completed, obtainmethod, current)
 	if (completed ~= true) then completed = false end
+	if (current ~= true) then current = false end
 	if (text == nil) then return end
 	local item = {
 		category = category,
 		text = text,
 		completed = completed,
 		obtainmethod = obtainmethod,
+		current = current,    -- true == in-progress mission (renders orange)
 	}
 	return item
 end

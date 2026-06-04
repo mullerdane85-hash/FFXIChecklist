@@ -634,7 +634,16 @@ end
 
 format_item = function(item)
     local text = item.text
-    local menucolor = item.completed and '(0,255,0)' or '(255,255,0)'
+    -- Three states: completed → green, currently in-progress → orange,
+    -- not yet started → yellow.
+    local menucolor
+    if item.completed then
+        menucolor = '(0,255,0)'
+    elseif item.current then
+        menucolor = '(255,165,0)'
+    else
+        menucolor = '(255,255,0)'
+    end
     if item.obtainmethod ~= nil then
         local obtainmethod = '\\cs(255,255,255)[' .. item.obtainmethod .. ']\\cr\\cs'..menucolor
         if item.category == 'Titles' then

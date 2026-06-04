@@ -7,6 +7,9 @@ data/
 libs/*.html
 libs/__pycache__/
 
+# Local backups created before destructive regenerations (e.g. AI normalization).
+libs/quest_info.lua.backup-*
+
 # Editor / OS junk
 *.swp
 *.swo

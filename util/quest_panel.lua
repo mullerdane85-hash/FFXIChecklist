@@ -105,6 +105,7 @@ local CS_VALUE     = '\\cs(230,230,230)'
 local CS_HEADER    = '\\cs(255,220,140)'
 local CS_BULLET    = '\\cs(180,200,230)'
 local CS_MUTED     = '\\cs(170,170,170)'
+local CS_SECTION   = '\\cs(255,200,100)'   -- ── X ── section dividers from BG-Wiki H3s
 local CS_END       = '\\cr'
 
 -- ---------------------------------------------------------------------------
@@ -243,23 +244,92 @@ local function _emit_field(lines, label, value)
     for _, l in ipairs(wrapped) do lines[#lines+1] = l .. CS_END end
 end
 
-local function _emit_walk(lines, items, depth)
+-- Detect a `── Title ──` divider produced by the scraper from a BG-Wiki H3.
+-- Returns the inner title string on match, otherwise nil.
+local function _section_title(text)
+    return text and text:match('^──%s+(.-)%s+──$')
+end
+
+-- After a section divider, sibling items render indented as if they were the
+-- divider's children. BG-Wiki's source has no explicit end-of-section marker,
+-- so we use a heuristic to detect when the walkthrough resumes the main flow.
+-- These phrases match the common "back to the main steps" wording across pages.
+local _RETURN_PATTERNS = {
+    '^Once you',
+    '^Once the',
+    '^After the cutscene',
+    '^After you',
+    '^After completing',
+    '^After defeating',
+    '^Finally',
+    '^Return to ',
+    '^Head back',
+    '^Head to ',
+    '^Travel to ',
+    '^Speak to .- to receive',
+    '^Trade .- to receive',
+    '^Examine ',
+    '^Report to ',
+    '^Talk to .- for your reward',
+}
+local function _is_return_to_flow(text)
+    if not text then return false end
+    for _, pat in ipairs(_RETURN_PATTERNS) do
+        if text:match(pat) then return true end
+    end
+    return false
+end
+
+local function _emit_walk(lines, items, depth, section_depth)
     depth = depth or 0
-    local indent = string.rep('   ', depth)
-    local bullet = (depth == 0) and '* ' or '- '
+    section_depth = section_depth or 0   -- extra indent applied while inside a section
+    local effective = depth + section_depth
+    local indent = string.rep('   ', effective)
+    local bullet = (effective == 0) and '* ' or '- '
     local lead   = indent .. bullet
+    -- Sticky-section tracking: once a divider appears at this level, every
+    -- sibling item until either the next divider OR a return-to-flow phrase
+    -- (e.g. "Once you have...", "After the cutscene...") is rendered indented
+    -- one level deeper, as if it were the divider's child.
+    local local_section_depth = section_depth
     for _, entry in ipairs(items) do
         local text = entry[1] or ''
-        local body_w = TOOLTIP_WIDTH_CHARS - #lead
-        if body_w < 16 then body_w = 16 end
-        local prefix = CS_BULLET .. lead .. CS_END .. CS_VALUE
-        local cont   = CS_VALUE .. string.rep(' ', #lead)
-        local wrapped = _wrap_line(text, body_w, prefix, cont)
-        for _, l in ipairs(wrapped) do
-            lines[#lines+1] = l .. CS_END
-        end
-        if entry.sub then
-            _emit_walk(lines, entry.sub, depth + 1)
+        local sect = _section_title(text)
+        if sect then
+            local hdr_indent = string.rep('   ', depth)
+            if #lines > 0 and lines[#lines] ~= '' then
+                lines[#lines+1] = ''
+            end
+            lines[#lines+1] = CS_SECTION .. hdr_indent .. '═══ ' .. sect .. ' ═══' .. CS_END
+            local_section_depth = section_depth + 1
+            if entry.sub then
+                _emit_walk(lines, entry.sub, depth + 1, section_depth)
+            end
+        else
+            -- If we're currently inside a section and this item reads like a
+            -- return to the main walkthrough flow, pop back to base depth and
+            -- insert a blank line so the visual hierarchy reads clearly.
+            if local_section_depth > section_depth and _is_return_to_flow(text) then
+                local_section_depth = section_depth
+                if #lines > 0 and lines[#lines] ~= '' then
+                    lines[#lines+1] = ''
+                end
+            end
+            local eff = depth + local_section_depth
+            local ind = string.rep('   ', eff)
+            local b   = (eff == 0) and '* ' or '- '
+            local ld  = ind .. b
+            local body_w = TOOLTIP_WIDTH_CHARS - #ld
+            if body_w < 16 then body_w = 16 end
+            local prefix = CS_BULLET .. ld .. CS_END .. CS_VALUE
+            local cont   = CS_VALUE .. string.rep(' ', #ld)
+            local wrapped = _wrap_line(text, body_w, prefix, cont)
+            for _, l in ipairs(wrapped) do
+                lines[#lines+1] = l .. CS_END
+            end
+            if entry.sub then
+                _emit_walk(lines, entry.sub, depth + 1, local_section_depth)
+            end
         end
     end
 end

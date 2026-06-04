@@ -11,8 +11,8 @@
 # and an optional <font style="color:red"><b>Note:</b></font>... block.
 
 import re, sys, os, html as htmllib, urllib.request, time, json
-from scrape_all_missions import (
-    fetch, fetch_category_pages, strip_tags, parse_walkthrough,
+from scrape_missions import (
+    fetch, fetch_category_pages, strip_tags, parse_walkthrough, parse_notes,
     lua_str, emit_walkthrough,
 )
 
@@ -163,6 +163,7 @@ def scrape_quest(slug, display_title):
     html = fetch(slug)
     info = parse_quest_info_table(html)
     walk = parse_walkthrough(html)
+    notes = parse_notes(html)
     note = parse_note(html)
     rec = {
         'page'            : display_title,
@@ -180,11 +181,12 @@ def scrape_quest(slug, display_title):
         'rewards'         : info.get('Rewards','') or info.get('Reward',''),
         'note'            : note,
         'walkthrough'     : walk,
+        'notes'           : notes,
     }
     # Junk filter: skip pages with neither title nor any quest-shaped fields.
     if not (rec['title'] and (rec['description'] or rec['starting_npc']
-                              or rec['walkthrough'] or rec['required_fame']
-                              or rec['rewards'])):
+                              or rec['walkthrough'] or rec['notes']
+                              or rec['required_fame'] or rec['rewards'])):
         return None
     return rec
 
@@ -226,6 +228,10 @@ def emit_quest_block(L, subtab, missions):
             L.append('        },')
         else:
             L.append('        walkthrough       = {},')
+        if m.get('notes'):
+            L.append('        notes             = {')
+            L.extend(emit_walkthrough(m['notes'], 12))
+            L.append('        },')
         L.append('    },')
     L.append('}')
     L.append('')

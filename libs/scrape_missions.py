@@ -131,17 +131,9 @@ def parse_info_table(html):
             info = local
     return info if best_score >= 1 else {}
 
-def parse_walkthrough(html):
-    m = re.search(r'<h2><span[^>]*id="Walkthrough"[^>]*>.*?</span>\s*</h2>(.*?)(?=<h2>|<!--|</div></div><div class="printfooter")', html, re.DOTALL)
-    if not m: return []
-    chunk = m.group(1)
-    chunk = re.sub(r'<figure[^>]*>.*?</figure>', '', chunk, flags=re.DOTALL)
-    return parse_ul(chunk)
-
-def parse_ul(chunk):
-    start = chunk.find('<ul>')
-    if start < 0: return []
-    depth = 0; i = start
+def _consume_ul(chunk, pos):
+    """At chunk[pos]=='<ul>', walk balanced ul..</ul>; return (parsed_items, end_pos)."""
+    depth = 0; i = pos
     while i < len(chunk):
         if chunk[i:i+4] == '<ul>':
             depth += 1; i += 4
@@ -150,8 +142,83 @@ def parse_ul(chunk):
             if depth == 0: break
         else:
             i += 1
-    body = chunk[start+4:i-5]
-    return parse_li_list(body)
+    body = chunk[pos+4 : i-5]
+    return parse_li_list(body), i
+
+def _find_section(html, section_id):
+    """Capture body of an <h2 id=section_id> up to the next <h2> or printfooter."""
+    m = re.search(
+        r'<h2><span[^>]*id="' + re.escape(section_id) +
+        r'"[^>]*>.*?</span>\s*</h2>(.*?)(?=<h2>|<!--|</div></div><div class="printfooter")',
+        html, re.DOTALL)
+    if not m: return None
+    chunk = m.group(1)
+    chunk = re.sub(r'<figure[^>]*>.*?</figure>', '', chunk, flags=re.DOTALL)
+    chunk = re.sub(r'<style[^>]*>.*?</style>', '', chunk, flags=re.DOTALL)
+    return chunk
+
+def parse_walkthrough(html):
+    """Walk every top-level <ul>, <h3>, and narrator <p> under the Walkthrough h2.
+    Earlier versions only grabbed the first <ul> and dropped everything after the
+    first H3 sub-section (e.g. 'NPC Outfits' on TVR 1-3), and never captured the
+    Notes h2 at all. This version preserves the full BG-Wiki content."""
+    chunk = _find_section(html, 'Walkthrough')
+    if chunk is None: return []
+    out = []
+    pos = 0
+    n = len(chunk)
+    while pos < n:
+        # Find next top-level block of interest
+        nxt = None
+        for tag in ('<ul>', '<h3', '<p>', '<p '):
+            i = chunk.find(tag, pos)
+            if i < 0: continue
+            if nxt is None or i < nxt[0]: nxt = (i, tag)
+        if nxt is None: break
+        i, tag = nxt
+        if tag == '<ul>':
+            items, end = _consume_ul(chunk, i)
+            out.extend(items)
+            pos = end
+        elif tag == '<h3':
+            close = chunk.find('</h3>', i)
+            if close < 0: break
+            title = strip_tags(chunk[i:close])
+            if title:
+                # Visual divider in the rendered panel: `── NPC Outfits ──`.
+                out.append((f'── {title} ──', []))
+            pos = close + 5
+        else:  # <p> / <p ...>
+            close = chunk.find('</p>', i)
+            if close < 0: break
+            text = strip_tags(chunk[i:close])
+            # Skip empty paragraph dividers but keep meaningful intro lines.
+            if text and len(text) > 4:
+                out.append((text, []))
+            pos = close + 4
+    return out
+
+def parse_notes(html):
+    """Capture the Notes h2 section as a flat list of bullets."""
+    chunk = _find_section(html, 'Notes')
+    if chunk is None: return []
+    out = []
+    pos = 0
+    n = len(chunk)
+    while pos < n:
+        i = chunk.find('<ul>', pos)
+        if i < 0: break
+        items, end = _consume_ul(chunk, i)
+        out.extend(items)
+        pos = end
+    return out
+
+def parse_ul(chunk):
+    """Legacy helper kept for callers that explicitly want the first <ul> only."""
+    start = chunk.find('<ul>')
+    if start < 0: return []
+    items, _ = _consume_ul(chunk, start)
+    return items
 
 def parse_li_list(body):
     out = []
@@ -195,6 +262,7 @@ def scrape_mission(slug, display_title):
     html = fetch(slug)
     info = parse_info_table(html)
     walk = parse_walkthrough(html)
+    notes = parse_notes(html)
     # Pull description from any of several possible label variants.
     desc = (info.get('Description') or info.get('Objective')
             or info.get('Mission Orders') or '')
@@ -209,6 +277,7 @@ def scrape_mission(slug, display_title):
         'repeatable'   : info.get('Repeatable',''),
         'description'  : desc,
         'walkthrough'  : walk,
+        'notes'        : notes,
         'previous'     : info.get('Previous Mission','') or info.get('Previous Assault',''),
         'next'         : info.get('Next Mission','')     or info.get('Next Assault',''),
         # Assault-specific (empty for regular missions)
@@ -220,8 +289,8 @@ def scrape_mission(slug, display_title):
     # Filter: skip pages with no useful info at all (NPC/gear/category-list
     # noise pulled in from the category pages).
     if not (rec['title'] and (rec['description'] or rec['starting_npc']
-                              or rec['walkthrough'] or rec['series']
-                              or rec['assault_rank'])):
+                              or rec['walkthrough'] or rec['notes']
+                              or rec['series'] or rec['assault_rank'])):
         return None
     return rec
 
@@ -279,6 +348,10 @@ def emit_lua(missions_by_subtab, outpath):
                 L.append('        },')
             else:
                 L.append('        walkthrough  = {},')
+            if m.get('notes'):
+                L.append('        notes        = {')
+                L.extend(emit_walkthrough(m['notes'], 12))
+                L.append('        },')
             L.append('    },')
         L.append('}')
         L.append('')

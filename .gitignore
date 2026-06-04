@@ -2,6 +2,11 @@
 # Gitignored so individual progress doesn't get committed.
 data/
 
+# BG-Wiki HTML cache produced by libs/scrape_missions.py + scrape_quests.py.
+# The generated quest_info.lua is committed; the raw cache is not.
+libs/*.html
+libs/__pycache__/
+
 # Editor / OS junk
 *.swp
 *.swo

@@ -325,6 +325,13 @@ local function _build_lines(rec)
         _emit_walk(L, d.walkthrough, 0)
     end
 
+    -- The H2 "Notes" section from BG-Wiki, when present, lands here.
+    if d.notes and #d.notes > 0 then
+        L[#L+1] = ''
+        L[#L+1] = CS_HEADER .. 'Notes' .. CS_END
+        _emit_walk(L, d.notes, 0)
+    end
+
     -- Footer.
     if d.series and d.series ~= '' then
         L[#L+1] = ''

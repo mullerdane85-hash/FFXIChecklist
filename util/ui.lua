@@ -978,8 +978,10 @@ windower.register_event('prerender', function()
         -- completed filtering keeps the wiki panel aligned with the
         -- highlighted row.
         local items = displayed_items or tabs[active_tab].items
+        local sel_page
         if items and items[selected] then
             sel_text = items[selected].text
+            sel_page = items[selected].page   -- explicit BG-Wiki page key when available
         end
         -- If we're in global findall mode, the matched item text is
         -- prefixed with "[Subtab Name] " -- strip that so the wiki
@@ -992,15 +994,23 @@ windower.register_event('prerender', function()
         -- defaults to 1 which is the "==== Bastok Missions ====" header),
         -- fall back to the first item that does map to a known mission so
         -- the wiki panel still has something useful to show.
+        -- Page-key lookup takes precedence over title lookup so misspelled or
+        -- non-unique BG-Wiki titles (e.g. TVR "Cardian's" vs "Cardians'")
+        -- still resolve. Only fall back to text search if no page is set
+        -- AND the title can't be found either.
         if quest_panel and quest_panel.is_starter(subtab_name)
-           and items and not (quest_panel.lookup(sel_text)) then
+           and items
+           and not (sel_page and quest_panel.lookup_page(sel_page))
+           and not (quest_panel.lookup(sel_text)) then
             for idx = 1, #items do
                 local t = items[idx] and items[idx].text
+                local p = items[idx] and items[idx].page
                 if search_query ~= '' and search_scope == 'all' and t then
                     t = t:gsub('^%[[^%]]+%]%s*', '')
                 end
-                if quest_panel.lookup(t) then
+                if (p and quest_panel.lookup_page(p)) or quest_panel.lookup(t) then
                     sel_text = t
+                    sel_page = p
                     break
                 end
             end
@@ -1010,6 +1020,7 @@ windower.register_event('prerender', function()
             show_wiki     = (trackermenusettings.showwikiinfo == true),
             subtab_name   = subtab_name,
             selected_text = sel_text,
+            selected_page = sel_page,
             anchor_x      = trackermenusettings.pos.x,
             anchor_y      = trackermenusettings.pos.y,
             panel_w       = PANEL_W,

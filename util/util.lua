@@ -51,7 +51,7 @@ util.cleanspaces = function(str)
     return str:gsub(" ", "_")
 end
 
-util.list_item = function(category, text, completed, obtainmethod, current)
+util.list_item = function(category, text, completed, obtainmethod, current, page)
 	if (completed ~= true) then completed = false end
 	if (current ~= true) then current = false end
 	if (text == nil) then return end
@@ -61,6 +61,9 @@ util.list_item = function(category, text, completed, obtainmethod, current)
 		completed = completed,
 		obtainmethod = obtainmethod,
 		current = current,    -- true == in-progress mission (renders orange)
+		page = page,          -- explicit quest_info.lua key, used by the side panel
+		                      -- when the displayed title doesn't uniquely or
+		                      -- correctly map to a BG-Wiki page key.
 	}
 	return item
 end

@@ -429,6 +429,14 @@ function quest_panel.lookup(title)
     return title_index[clean] or title_index[_norm(clean)]
 end
 
+-- Explicit-key lookup. Used by lists (e.g. TVR missions) that pass through
+-- an exact quest_info.lua key, so misspelled or duplicate titles can't
+-- misroute the panel.
+function quest_panel.lookup_page(page)
+    if not page or page == '' then return nil end
+    return title_index[page] or title_index[_norm(page)]
+end
+
 -- ---------------------------------------------------------------------------
 -- Render the panel at fixed size next to the main window.
 -- ---------------------------------------------------------------------------
@@ -618,7 +626,10 @@ function quest_panel.tick(opts)
     if not opts.subtab_name or not subtab_known[opts.subtab_name] then
         _hide(); return
     end
-    local rec = quest_panel.lookup(opts.selected_text)
+    -- Prefer the explicit page key (passed from list items that carry one),
+    -- fall back to title-based lookup otherwise.
+    local rec = (opts.selected_page and quest_panel.lookup_page(opts.selected_page))
+                or quest_panel.lookup(opts.selected_text)
     if not rec then
         _hide(); return
     end

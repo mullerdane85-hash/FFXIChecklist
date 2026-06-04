@@ -101,7 +101,7 @@ quest_util.log_missions = function(mission_type, current_mission_id)
 			-- distinguishable from both completed (green) and not-yet-started.
 			is_current = true
 		end
-		table.insert(output_list, util.list_item(nil, maps[mission_type][key].name, completion, nil, is_current))
+		table.insert(output_list, util.list_item(nil, maps[mission_type][key].name, completion, nil, is_current, maps[mission_type][key].page))
 	end
 	playertracker[mission_type..'_completed'] = complete
 	playertracker[mission_type..'_total'] = total

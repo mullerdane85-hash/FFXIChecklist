@@ -213,6 +213,70 @@ def parse_notes(html):
         pos = end
     return out
 
+def parse_section_body(chunk):
+    """Generic walker for any H2 section body. Returns a list of bullet items
+    interleaved with `── H3 Title ──` dividers and meaningful paragraphs —
+    the same shape as parse_walkthrough(), so the existing renderer handles
+    Plot_Details / Reward / Trivia / etc. with zero extra UI work."""
+    if chunk is None: return []
+    out = []
+    pos = 0
+    n = len(chunk)
+    while pos < n:
+        nxt = None
+        for tag in ('<ul>', '<h3', '<p>', '<p '):
+            i = chunk.find(tag, pos)
+            if i < 0: continue
+            if nxt is None or i < nxt[0]: nxt = (i, tag)
+        if nxt is None: break
+        i, tag = nxt
+        if tag == '<ul>':
+            items, end = _consume_ul(chunk, i)
+            out.extend(items)
+            pos = end
+        elif tag == '<h3':
+            close = chunk.find('</h3>', i)
+            if close < 0: break
+            title = strip_tags(chunk[i:close])
+            if title:
+                out.append((f'── {title} ──', []))
+            pos = close + 5
+        else:
+            close = chunk.find('</p>', i)
+            if close < 0: break
+            text = strip_tags(chunk[i:close])
+            if text and len(text) > 4:
+                out.append((text, []))
+            pos = close + 4
+    return out
+
+# H2 sections we DO NOT capture as standalone fields because they're either
+# already pulled by dedicated parsers (Walkthrough / Notes), purely
+# navigational (See_Also), or low-value boilerplate.
+_SKIP_SECTIONS = {'walkthrough', 'notes', 'see_also', 'external_links', 'references'}
+
+def parse_all_other_sections(html):
+    """Find every H2 section that ISN'T Walkthrough / Notes and capture its
+    body. Returns dict mapping section title (display name, NOT id) -> list
+    of bullet items. The user reported that previous scrapes silently
+    dropped Plot_Details, Related_Links, Trust:_Gessho, Reward, Boss_Fight,
+    Reacquisition, Enemies, Drops, Map etc. — this catches them all."""
+    out = {}
+    for m in re.finditer(
+            r'<h2><span[^>]*id="([^"]+)"[^>]*>(.*?)</span>\s*</h2>(.*?)(?=<h2>|<!--|</div></div><div class="printfooter")',
+            html, re.DOTALL):
+        sec_id = m.group(1)
+        sec_title = strip_tags(m.group(2))
+        if sec_id.lower() in _SKIP_SECTIONS: continue
+        if sec_title.lower() in _SKIP_SECTIONS: continue
+        body = m.group(3)
+        body = re.sub(r'<figure[^>]*>.*?</figure>', '', body, flags=re.DOTALL)
+        body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL)
+        items = parse_section_body(body)
+        if items:
+            out[sec_title] = items
+    return out
+
 def parse_ul(chunk):
     """Legacy helper kept for callers that explicitly want the first <ul> only."""
     start = chunk.find('<ul>')
@@ -263,6 +327,7 @@ def scrape_mission(slug, display_title):
     info = parse_info_table(html)
     walk = parse_walkthrough(html)
     notes = parse_notes(html)
+    sections = parse_all_other_sections(html)
     # Pull description from any of several possible label variants.
     desc = (info.get('Description') or info.get('Objective')
             or info.get('Mission Orders') or '')
@@ -278,6 +343,7 @@ def scrape_mission(slug, display_title):
         'description'  : desc,
         'walkthrough'  : walk,
         'notes'        : notes,
+        'sections'     : sections,
         'previous'     : info.get('Previous Mission','') or info.get('Previous Assault',''),
         'next'         : info.get('Next Mission','')     or info.get('Next Assault',''),
         # Assault-specific (empty for regular missions)
@@ -351,6 +417,17 @@ def emit_lua(missions_by_subtab, outpath):
             if m.get('notes'):
                 L.append('        notes        = {')
                 L.extend(emit_walkthrough(m['notes'], 12))
+                L.append('        },')
+            # Every other H2 section (Plot_Details, Reward, Trivia, Boss_Fight,
+            # Trust:_Name, Enemies, Drops, Map, Reacquisition, ...). Keyed by
+            # the section's display title — the panel renders them as
+            # additional `═══ Title ═══` blocks after Walkthrough/Notes.
+            if m.get('sections'):
+                L.append('        sections     = {')
+                for sec_title, items in m['sections'].items():
+                    L.append(f'            [{lua_str(sec_title)}] = {{')
+                    L.extend(emit_walkthrough(items, 16))
+                    L.append('            },')
                 L.append('        },')
             L.append('    },')
         L.append('}')

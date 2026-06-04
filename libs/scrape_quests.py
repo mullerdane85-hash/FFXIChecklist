@@ -13,7 +13,7 @@
 import re, sys, os, html as htmllib, urllib.request, time, json
 from scrape_missions import (
     fetch, fetch_category_pages, strip_tags, parse_walkthrough, parse_notes,
-    lua_str, emit_walkthrough,
+    parse_all_other_sections, lua_str, emit_walkthrough,
 )
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -164,6 +164,7 @@ def scrape_quest(slug, display_title):
     info = parse_quest_info_table(html)
     walk = parse_walkthrough(html)
     notes = parse_notes(html)
+    sections = parse_all_other_sections(html)
     note = parse_note(html)
     rec = {
         'page'            : display_title,
@@ -182,10 +183,12 @@ def scrape_quest(slug, display_title):
         'note'            : note,
         'walkthrough'     : walk,
         'notes'           : notes,
+        'sections'        : sections,
     }
     # Junk filter: skip pages with neither title nor any quest-shaped fields.
     if not (rec['title'] and (rec['description'] or rec['starting_npc']
                               or rec['walkthrough'] or rec['notes']
+                              or rec['sections']
                               or rec['required_fame'] or rec['rewards'])):
         return None
     return rec
@@ -231,6 +234,14 @@ def emit_quest_block(L, subtab, missions):
         if m.get('notes'):
             L.append('        notes             = {')
             L.extend(emit_walkthrough(m['notes'], 12))
+            L.append('        },')
+        # Every other H2 section (Plot_Details, Trivia, Boss_Fight, etc.)
+        if m.get('sections'):
+            L.append('        sections          = {')
+            for sec_title, items in m['sections'].items():
+                L.append(f'            [{lua_str(sec_title)}] = {{')
+                L.extend(emit_walkthrough(items, 16))
+                L.append('            },')
             L.append('        },')
         L.append('    },')
     L.append('}')

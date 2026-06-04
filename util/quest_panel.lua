@@ -402,6 +402,27 @@ local function _build_lines(rec)
         _emit_walk(L, d.notes, 0)
     end
 
+    -- Every other H2 section captured by the scraper (Plot_Details,
+    -- Reward, Trivia, Boss_Fight, Trust:_<Name>, Enemies, Drops, Map,
+    -- Reacquisition, Related_Links, ...). Rendered after Notes in a
+    -- stable order so two reloads produce the same panel.
+    if d.sections and next(d.sections) then
+        local ordered_keys = {}
+        for k in pairs(d.sections) do ordered_keys[#ordered_keys+1] = k end
+        table.sort(ordered_keys)
+        for _, sec_title in ipairs(ordered_keys) do
+            local items = d.sections[sec_title]
+            if items and #items > 0 then
+                L[#L+1] = ''
+                -- BG-Wiki section ids use underscores; humanize them for
+                -- display (Plot_Details -> Plot Details).
+                local display = sec_title:gsub('_', ' ')
+                L[#L+1] = CS_HEADER .. display .. CS_END
+                _emit_walk(L, items, 0)
+            end
+        end
+    end
+
     -- Footer.
     if d.series and d.series ~= '' then
         L[#L+1] = ''

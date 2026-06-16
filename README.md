@@ -2,9 +2,11 @@
 
 ## 🔑 Hotkey
 
-**Default toggle: `M`**
+**Default toggle: `Alt+C`**
 
-Press `M` in-game to show or hide the window. Disabled while the chat bar or macro editor is open so it doesn't interrupt typing.
+Press `Alt+C` in-game to show or hide the window. Goes through Windower's `bind` system, so the keybind is automatically suppressed while the chat bar, search box, or macro editor is open — won't fight with typing.
+
+`C` for "Checklist".
 
 Slash-command equivalents: `//ffxic`, `//ffxichecklist`, `//checklist`, `//clist`.
 
@@ -21,7 +23,7 @@ state — just a more readable window and a real keyboard hotkey.
 > **Credit:** every line of the tracker engine, packet handler, and
 > data table (`maps/` totals ~1 MB of hand-curated FFXI content) is
 > **HiPotionQ8**'s work. This fork's contributions are: the addon
-> rename, the M-key keyboard toggle, the panel-alpha bump to 250 so
+> rename, the Alt+C keyboard toggle, the panel-alpha bump to 250 so
 > the overlay reads as a solid window, and packaging consistent with
 > the other addons in this author's setup. The original repo's
 > permission grant (*"this thing is free to use / share / edit /
@@ -45,8 +47,8 @@ To autoload, add `lua load FFXIChecklist` to `scripts\init.txt`.
 
 ## Keyboard
 
-Press **M** to toggle the window. The keybind is suppressed while chat
-is open so typing 'm' in messages still works.
+Press **Alt+C** to toggle the window. The keybind is suppressed while chat
+is open so typing 'c' in messages still works.
 
 ## Commands
 
@@ -56,7 +58,7 @@ back-compat with scripts written for HiPotionQ8's addon.
 
 | Command | Description |
 |---|---|
-| `//ffxic` | Toggle the window (same as the M hotkey) |
+| `//ffxic` | Toggle the window (same as Alt+C) |
 | `//ffxic show` / `//ffxic hide` | Explicit show/hide |
 | `//ffxic scale <n>` | UI scale factor (default 1, e.g. `0.75`) |
 | `//ffxic showcompleted` | Toggle: show completed items in green (default off) |
@@ -128,9 +130,9 @@ need to be re-collected per session.
 | Change | Why |
 |---|---|
 | Renamed to FFXIChecklist | Consistent with the other `FFXI*` addons in this author's repo group |
-| Added M-key keyboard toggle | The original was slash-command only |
+| Added Alt+C keyboard toggle | The original was slash-command only |
 | Bumped UI panel alphas 200-240 → 250 | Original overlay was translucent; window now reads as solid |
-| New `toggle` command (and bare `//ffxic`) | The M hotkey routes through it; original only had `show`/`hide` |
+| New `toggle` command (and bare `//ffxic`) | The Alt+C hotkey routes through it; original only had `show`/`hide` |
 | Back-compat aliases (`xic`, `xichecklist`) | Scripts written for the original keep working |
 
 Tracker logic, packet handlers, the entire `maps/` data set, and the

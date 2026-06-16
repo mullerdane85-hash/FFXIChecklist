@@ -30,6 +30,7 @@ _addon.commands = {'ffxichecklist', 'ffxic', 'checklist', 'clist',
 require('sets')
 packets = require('packets')
 local config = require('config')
+local hotkey = require('libs/hotkey')
 res = require('resources')
 require('chat')
 
@@ -1329,6 +1330,7 @@ end
 windower.register_event('load', 'login', 'logout', addon_init)
 windower.register_event('logout', addon_clear)
 windower.register_event('unload', function()
+	pcall(hotkey.unbind, 'ffxic')
 	-- Flush any pending tab_logs save so quitting Windower / reloading
 	-- the addon doesn't lose the most recent updates from a packet burst
 	-- that arrived inside the 5s debounce window.
@@ -1344,15 +1346,8 @@ windower.register_event('zone change', schedule_tab_logs_save)
 windower.register_event('job change', schedule_tab_logs_save)
 
 -- =============================================================================
--- Keyboard toggle — M key. DirectInput scancode 0x32.
--- Skip the toggle while chat is open so typing 'm' in messages still works.
+-- Keyboard toggle — Alt+C via libs/hotkey (Windower bind). Modifier+letter
+-- avoids the in-game macro slots (Alt/Ctrl+0..9) and bare-letter chat
+-- conflicts. Windower's bind system already suppresses while typing.
 -- =============================================================================
-local DIK_M = 0x32
-windower.register_event('keyboard', function(dik, pressed, flags, blocked)
-	if blocked then return end
-	if not pressed then return end
-	if dik ~= DIK_M then return end
-	local info = windower.ffxi.get_info()
-	if info and info.chat_open then return end
-	windower.send_command('ffxic toggle')
-end)
+hotkey.bind('ffxic', 'toggle', 'alt', 'c')
